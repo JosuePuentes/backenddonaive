@@ -1,9 +1,14 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 class LoginInput(BaseModel):
     correo: str
     contraseña: str
+
+class PuntoVenta(BaseModel):
+    banco: str
+    puntoDebito: float
+    puntoCredito: float
 
 class Cuadre(BaseModel):
     dia: str
@@ -15,8 +20,7 @@ class Cuadre(BaseModel):
     devolucionesBs: float
     recargaBs: float
     pagomovilBs: float
-    puntoDebitoBs: float
-    puntoCreditoBs: float
+    puntosVenta: Optional[List[PuntoVenta]] = []
     efectivoBs: float
     totalBs: float
     totalBsEnUsd: float
@@ -24,4 +28,8 @@ class Cuadre(BaseModel):
     zelleUsd: float
     totalGeneralUsd: float
     diferenciaUsd: float
+    sobranteUsd: Optional[float] = 0
+    faltanteUsd: Optional[float] = 0
     delete: Optional[bool] = False
+    estado: Optional[str] = 'wait'
+    nombreFarmacia: Optional[str] = None

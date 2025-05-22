@@ -12,9 +12,12 @@ async def autenticar_usuario(correo: str, contraseña: str):
         return None
     return usuario
 
-async def login_y_token(correo: str, contraseña: str):
+# Ejemplo de login_y_token
+async def login_y_token(correo, contraseña, return_user=False):
     usuario = await autenticar_usuario(correo, contraseña)
     if not usuario:
         return None
     token = crear_token_jwt({"sub": usuario["correo"]})
+    if return_user:
+        return usuario, token
     return token

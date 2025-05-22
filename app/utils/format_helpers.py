@@ -37,10 +37,34 @@ async def crear_usuario_basico(correo: str, contraseña: str) -> dict:
         "correo": correo
     }
 
+# Crear un usuario con farmacias
+async def crear_usuario_con_farmacias(correo: str, contraseña: str, farmacias: dict) -> dict:
+    usuarios_collection = get_collection("USUARIOS")
+    usuario_existente = await usuarios_collection.find_one({"correo": correo})
+    if usuario_existente:
+        raise ValueError("Ya existe un usuario con ese correo.")
+
+    contraseña_segura = pwd_context.hash(contraseña)
+
+    nuevo_usuario = {
+        "correo": correo,
+        "contraseña": contraseña_segura,
+        "farmacias": farmacias  # Debe ser un dict, por ejemplo: {"01": "santa elena", "02": "rapifarma"}
+    }
+
+    resultado = await usuarios_collection.insert_one(nuevo_usuario)
+
+    return {
+        "id": str(resultado.inserted_id),
+        "correo": correo,
+        "farmacias": farmacias
+    }
+
 # Función de prueba
 async def main():
     try:
-        nuevo = await crear_usuario_basico("admin@gmail.com", "admin")
+        farmacias = {"01": "santa elena", "02": "rapifarma"}
+        nuevo = await crear_usuario_con_farmacias("admin@gmail.com", "admin", farmacias)
         print("Usuario creado:", nuevo)
     except ValueError as e:
         print("Error:", str(e))
