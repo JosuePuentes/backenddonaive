@@ -35,8 +35,19 @@ async def obtener_cuadres():
 
 @router.get("/cuadres/all")
 async def obtener_todos_los_cuadres():
-    # Alias de /cuadres para compatibilidad con el frontend
-    return await obtener_cuadres()
+    db = get_collection("CUADRES").database  # Obtener la instancia de la base de datos
+    colecciones = await db.list_collection_names()
+    cuadres = []
+    for nombre in colecciones:
+        if nombre.startswith("CUADRES-"):
+            collection = db[nombre]
+            docs = await collection.find({}).to_list(length=None)
+            for r in docs:
+                r["_id"] = str(r["_id"])
+                # Extraer el código de farmacia del nombre de la colección
+                r["codigoFarmacia"] = nombre.replace("CUADRES-", "")
+            cuadres.extend(docs)
+    return cuadres
 
 @router.get("/cuadres/{farmacia_id}")
 async def obtener_cuadres_farmacia(farmacia_id: str):
@@ -83,12 +94,13 @@ async def get_farmacias():
                     farmacias[k] = v
     return {"farmacias": farmacias}
 
-@router.patch("/cuadres/{farmacia_id}/{dia}/{cajaNumero}/estado")
+@router.post("/cuadres/{farmacia_id}/{dia}/{cajaNumero}/estado")
 async def actualizar_estado_cuadre(farmacia_id: str, dia: str, cajaNumero: int, estado: str = Body(..., embed=True)):
     try:
         collection = get_collection(f"CUADRES-{farmacia_id}")
+        # Buscar por número (int) para cajaNumero
         result = await collection.update_one(
-            {"dia": dia, "cajaNumero": cajaNumero},
+            {"dia": dia, "cajaNumero": int(cajaNumero)},
             {"$set": {"estado": estado}}
         )
         if result.modified_count == 0:
@@ -96,4 +108,42 @@ async def actualizar_estado_cuadre(farmacia_id: str, dia: str, cajaNumero: int, 
         return {"message": f"Estado actualizado a {estado}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/cuadres/{farmacia_id}/{cuadre_id}/estado")
+async def actualizar_estado_cuadre_por_id(farmacia_id: str, cuadre_id: str, estado: str = Body(..., embed=True)):
+    try:
+        collection = get_collection(f"CUADRES-{farmacia_id}")
+        result = await collection.update_one(
+            {"_id": ObjectId(cuadre_id)},
+            {"$set": {"estado": estado}}
+        )
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Cuadre no encontrado o sin cambios")
+        return {"message": f"Estado actualizado a {estado}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/cuadres/{farmacia_id}/{dia}/{cajaNumero}/cajero")
+async def actualizar_cajero_cuadre(farmacia_id: str, dia: str, cajaNumero: int, cajero: str = Body(..., embed=True)):
+    try:
+        collection = get_collection(f"CUADRES-{farmacia_id}")
+        result = await collection.update_one(
+            {"dia": dia, "cajaNumero": int(cajaNumero)},
+            {"$set": {"cajero": cajero}}
+        )
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Cuadre no encontrado o sin cambios")
+        return {"message": f"Cajero actualizado a {cajero}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/cajeros")
+async def get_cajeros():
+    collection = get_collection("CAJEROS")
+    docs = await collection.find({}).to_list(length=None)
+    # Convertir _id a string para el frontend
+    for doc in docs:
+        if '_id' in doc:
+            doc['_id'] = str(doc['_id'])
+    return docs
 
