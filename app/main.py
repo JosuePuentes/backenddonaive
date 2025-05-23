@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.routes_example import router as example_router
 from app.routes import auth
 
+
 app = FastAPI()
 
 # CORS
