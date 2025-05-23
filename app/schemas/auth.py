@@ -16,6 +16,7 @@ class Cuadre(BaseModel):
     tasa: float
     turno: str
     cajero: str
+    cajeroId: Optional[str] = None
     totalCajaSistemaBs: float
     devolucionesBs: float
     recargaBs: float
