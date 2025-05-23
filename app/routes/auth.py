@@ -10,6 +10,11 @@ from datetime import datetime
 
 router = APIRouter()
 
+@router.get("/")
+async def root():
+    return {"message": "API funcionando"}
+
+
 @router.post("/auth/login")
 async def login_user(data: LoginInput):
     usuario, token = await login_y_token(data.correo, data.contraseña, return_user=True)
