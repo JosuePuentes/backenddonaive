@@ -5,5 +5,6 @@ import certifi
 client = AsyncIOMotorClient(MONGO_URI,tlsCAFile=certifi.where())
 db = client["RAPIFARMA"]
 
+
 def get_collection(nombre: str) -> AsyncIOMotorCollection:
     return db[nombre]
