@@ -77,6 +77,11 @@ async def agregar_cuadre(farmacia: str, cuadre: Cuadre):
         cuadre_dict["faltanteUsd"] = abs(diferencia) if diferencia < 0 else 0
         # puntosVenta ya viene como array de objetos
         cuadre_dict["cajeroId"] = cuadre.cajeroId  # Store the cashier's ID
+
+        # Asegurarse de que valesUsd esté incluido
+        if "valesUsd" not in cuadre_dict:
+            cuadre_dict["valesUsd"] = 0
+
         result = collection.insert_one(cuadre_dict)
         return {"message": "Cuadre guardado", "result": str(result)}
     except Exception as e:
