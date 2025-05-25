@@ -63,8 +63,16 @@ async def crear_usuario_con_farmacias(correo: str, contraseña: str, farmacias: 
 # Función de prueba
 async def main():
     try:
-        farmacias = {"01": "santa elena", "02": "rapifarma"}
-        nuevo = await crear_usuario_con_farmacias("admin@gmail.com", "admin", farmacias)
+        farmacias = {
+    "01": "Santa Elena",
+    "02": "Sur America",
+    "03": "Rapifarma",
+    "04": "San Carlos",
+    "05": "Las Alicias",
+    "06": "San Martin",
+    "07": "Milagro Norte"
+  }
+        nuevo = await crear_usuario_con_farmacias("anubis1977puentes@gmail.com", "14117284", farmacias)
         print("Usuario creado:", nuevo)
     except ValueError as e:
         print("Error:", str(e))
