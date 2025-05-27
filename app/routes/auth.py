@@ -3,12 +3,21 @@ from app.schemas.auth import LoginInput, Cuadre
 from app.services.users_service import login_y_token
 
 from fastapi import APIRouter, Query
-from typing import List
+from typing import List, Optional
 from app.db.mongo import get_collection  # tu helper para acceder a la colección
 from bson import ObjectId
+from bson.errors import InvalidId
 from datetime import datetime
+from pydantic import BaseModel
 
 router = APIRouter()
+
+class Gasto(BaseModel):
+    monto: float
+    titulo: str
+    descripcion: str
+    localidad: str
+    fecha: str
 
 @router.get("/")
 async def root():
@@ -77,13 +86,21 @@ async def agregar_cuadre(farmacia: str, cuadre: Cuadre):
         cuadre_dict["faltanteUsd"] = abs(diferencia) if diferencia < 0 else 0
         # puntosVenta ya viene como array de objetos
         cuadre_dict["cajeroId"] = cuadre.cajeroId  # Store the cashier's ID
-
-        # Asegurarse de que valesUsd esté incluido
-        if "valesUsd" not in cuadre_dict:
-            cuadre_dict["valesUsd"] = 0
-
         result = collection.insert_one(cuadre_dict)
         return {"message": "Cuadre guardado", "result": str(result)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/cuadres")
+async def agregar_cuadre(cuadre: Cuadre):
+    try:
+        collection = get_collection("CUADRES")
+        cuadre_dict = cuadre.dict()
+        cuadre_dict["fecha"] = datetime.strptime(cuadre.fecha, "%Y-%m-%d")
+        # Add default estado field
+        cuadre_dict["estado"] = "wait"
+        result = await collection.insert_one(cuadre_dict)
+        return {"message": "Cuadre agregado exitosamente", "id": str(result.inserted_id)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -157,4 +174,86 @@ async def get_cajeros():
         if '_id' in doc:
             doc['_id'] = str(doc['_id'])
     return docs
+
+@router.post("/gastos")
+async def agregar_gasto(gasto: Gasto):
+    try:
+        collection = get_collection("GASTOS")
+        gasto_dict = gasto.dict()
+        gasto_dict["fecha"] = datetime.strptime(gasto.fecha, "%Y-%m-%d")
+        # Add default estado field
+        gasto_dict["estado"] = "wait"
+        result = await collection.insert_one(gasto_dict)
+        return {"message": "Gasto agregado exitosamente", "id": str(result.inserted_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/gastos")
+async def obtener_gastos(
+    localidad: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None
+):
+    try:
+        collection = get_collection("GASTOS")
+        filtro = {}
+
+        if localidad:
+            filtro["localidad"] = localidad
+
+        if fecha_inicio and fecha_fin:
+            filtro["fecha"] = {
+                "$gte": datetime.strptime(fecha_inicio, "%Y-%m-%d"),
+                "$lte": datetime.strptime(fecha_fin, "%Y-%m-%d")
+            }
+
+        resultados = await collection.find(filtro).to_list(1000)
+        for r in resultados:
+            r["_id"] = str(r["_id"])
+            r["fecha"] = r["fecha"].strftime("%Y-%m-%d")
+
+        return resultados
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/gastos/estado")
+async def actualizar_estado_gasto(data: dict = Body(...)):
+    try:
+        try:
+            gasto_id = ObjectId(data.get("id"))
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID inválido")
+
+        nuevo_estado = data.get("estado")
+
+        if not nuevo_estado:
+            raise HTTPException(status_code=400, detail="Faltan campos obligatorios: estado")
+
+        collection = get_collection("GASTOS")
+        result = await collection.update_one(
+            {"_id": gasto_id},
+            {"$set": {"estado": nuevo_estado}}
+        )
+
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Gasto no encontrado o sin cambios")
+
+        return {"message": f"Estado del gasto actualizado a {nuevo_estado}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/gastos/total")
+async def obtener_total_gastos_por_farmacia():
+    try:
+        collection = get_collection("GASTOS")
+        pipeline = [
+            {"$match": {"monto": {"$gte": 0}}},  # Exclude negative values
+            {"$group": {"_id": "$localidad", "totalGastos": {"$sum": "$monto"}}}
+        ]
+        resultados = await collection.aggregate(pipeline).to_list(length=None)
+        # Convertir el resultado a un diccionario {localidad: totalGastos}
+        gastos_por_farmacia = {r["_id"]: r["totalGastos"] for r in resultados}
+        return gastos_por_farmacia
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 

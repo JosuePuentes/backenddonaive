@@ -34,4 +34,3 @@ class Cuadre(BaseModel):
     delete: Optional[bool] = False
     estado: Optional[str] = 'wait'
     nombreFarmacia: Optional[str] = None
-    valesUsd: Optional[float] = 0  # Agregar el campo valesUsd con un valor predeterminado de 0
