@@ -305,7 +305,7 @@ async def actualizar_cajero(cajero_id: str, cajero: dict = Body(...)):
 async def obtener_comisiones_por_turno(
     startDate: str = Query(...),
     endDate: str = Query(...)
-):
+): 
     try:
         db = get_collection("CUADRES").database  # Obtenemos instancia de la base de datos
         colecciones = await db.list_collection_names()
