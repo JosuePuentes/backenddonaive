@@ -263,6 +263,14 @@ async def crear_cajero(cajero: dict = Body(...)):
         collection = get_collection("CAJERO")
         cajero["comision"] = cajero.get("comision", 0)  # Default commission
         cajero["estado"] = cajero.get("estado", "activo")  # Default state
+        # Limpia tipocomision: elimina strings vacíos y si es lista vacía, no lo guarda
+        if "tipocomision" in cajero:
+            if isinstance(cajero["tipocomision"], list):
+                cajero["tipocomision"] = [t for t in cajero["tipocomision"] if t]
+                if not cajero["tipocomision"]:
+                    cajero.pop("tipocomision")
+            elif not cajero["tipocomision"]:
+                cajero.pop("tipocomision")
         result = await collection.insert_one(cajero)
         return {"message": "Cajero creado exitosamente", "id": str(result.inserted_id)}
     except Exception as e:
@@ -280,14 +288,30 @@ async def actualizar_cajero(cajero_id: str, cajero: dict = Body(...)):
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid _id format")
 
+        # Limpia tipocomision: elimina strings vacíos y si es lista vacía, no lo guarda
+        if "tipocomision" in cajero:
+            if isinstance(cajero["tipocomision"], list):
+                cajero["tipocomision"] = [t for t in cajero["tipocomision"] if t]
+                if not cajero["tipocomision"]:
+                    cajero.pop("tipocomision")
+            elif not cajero["tipocomision"]:
+                cajero.pop("tipocomision")
+
         # Map field names to match database schema
         mapped_cajero = {
             "NOMBRE": cajero.get("nombre"),
             "ID": cajero.get("id"),
             "FARMACIAS": cajero.get("FARMACIAS"),
             "comision": int(cajero.get("comision", 0)),
-            "estado": cajero.get("estado")
+            "estado": cajero.get("estado"),
+            "tipocomision": cajero.get("tipocomision", None),
         }
+        # Agrega campos extendidos si existen
+        for campo in ["turno", "especial", "extra"]:
+            if campo in cajero:
+                mapped_cajero[campo] = cajero[campo]
+        # Elimina campos None para no sobreescribir con null
+        mapped_cajero = {k: v for k, v in mapped_cajero.items() if v is not None}
 
         # Perform the update
         result = await collection.update_one(
@@ -323,7 +347,21 @@ async def obtener_comisiones_por_turno(
                             "$gte": startDate,
                             "$lte": endDate,
                         },
-                        "estado": "verified"  # Filtrar solo cuadres verificados
+                        "estado": "verified"
+                    }
+                },
+                {
+                    "$lookup": {
+                        "from": "CAJERO",
+                        "localField": "cajeroId",
+                        "foreignField": "ID",
+                        "as": "cajeroInfo",
+                    }
+                },
+                {"$unwind": "$cajeroInfo"},
+                {
+                    "$match": {
+                        "cajeroInfo.tipocomision": {"$in": ["Turno"]}
                     }
                 },
                 {
@@ -332,38 +370,29 @@ async def obtener_comisiones_por_turno(
                             "cajeroId": "$cajeroId",
                             "turno": "$turno"
                         },
-                        "totalVentas": {
-                            "$sum": "$totalGeneralUsd"
-                        }
-                    }
-                },
-                {
-                    "$lookup": {
-                        "from": "CAJERO",
-                        "localField": "_id.cajeroId",
-                        "foreignField": "ID",
-                        "as": "cajeroInfo",
-                    }
-                },
-                {"$unwind": "$cajeroInfo"},
-                {
-                    "$addFields": {
-                        "comisionPorcentaje": {
-                            "$toDouble": "$cajeroInfo.comision"  # Convertimos a número si viene como string
-                        }
+                        # "totalVentas": {"$sum": {"$divide": ["$totalCajaSistemaBs", {"$ifNull": ["$tasa", 1]}]}},
+                        "totalVentas": {"$sum": "$totalGeneralUsd"},
+                        "totalSobrante": {"$sum": {"$ifNull": ["$sobranteUsd", 0]}},
+                        "totalFaltante": {"$sum": {"$ifNull": ["$faltanteUsd", 0]}},
+                        "cajero": {"$first": "$cajeroInfo.NOMBRE"},
+                        "comisionPorcentaje": {"$first": "$cajeroInfo.comision"},
+                        "farmacias": {"$first": "$cajeroInfo.FARMACIAS"}
                     }
                 },
                 {
                     "$project": {
-                        "cajero": "$cajeroInfo.NOMBRE",
+                        "cajero": 1,
                         "turno": "$_id.turno",
                         "totalVentas": 1,
+                        "sobrante": "$totalSobrante",
+                        "faltante": "$totalFaltante",
                         "comision": {
                             "$divide": [
-                                { "$multiply": ["$totalVentas", "$comisionPorcentaje"] },
+                                { "$multiply": ["$totalVentas", {"$toDouble": "$comisionPorcentaje"}] },
                                 100
                             ]
                         },
+                        "farmacias": 1,
                         "_id": 0
                     }
                 }
