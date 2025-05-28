@@ -261,16 +261,16 @@ async def obtener_total_gastos_por_farmacia():
 async def crear_cajero(cajero: dict = Body(...)):
     try:
         collection = get_collection("CAJERO")
-        cajero["comision"] = cajero.get("comision", 0)  # Default commission
+        # Procesar comision como float
+        cajero["comision"] = float(cajero.get("comision", 0))  # Default commission
         cajero["estado"] = cajero.get("estado", "activo")  # Default state
-        # Limpia tipocomision: elimina strings vacíos y si es lista vacía, no lo guarda
+        # Limpia tipocomision: elimina strings vacíos, pero si es lista vacía, la guarda como []
         if "tipocomision" in cajero:
             if isinstance(cajero["tipocomision"], list):
                 cajero["tipocomision"] = [t for t in cajero["tipocomision"] if t]
-                if not cajero["tipocomision"]:
-                    cajero.pop("tipocomision")
+                # Si queda vacía, se guarda como [] (no se elimina el campo)
             elif not cajero["tipocomision"]:
-                cajero.pop("tipocomision")
+                cajero["tipocomision"] = []
         result = await collection.insert_one(cajero)
         return {"message": "Cajero creado exitosamente", "id": str(result.inserted_id)}
     except Exception as e:
@@ -288,21 +288,20 @@ async def actualizar_cajero(cajero_id: str, cajero: dict = Body(...)):
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid _id format")
 
-        # Limpia tipocomision: elimina strings vacíos y si es lista vacía, no lo guarda
+        # Limpia tipocomision: elimina strings vacíos, pero si es lista vacía, la guarda como []
         if "tipocomision" in cajero:
             if isinstance(cajero["tipocomision"], list):
                 cajero["tipocomision"] = [t for t in cajero["tipocomision"] if t]
-                if not cajero["tipocomision"]:
-                    cajero.pop("tipocomision")
+                # Si queda vacía, se guarda como [] (no se elimina el campo)
             elif not cajero["tipocomision"]:
-                cajero.pop("tipocomision")
+                cajero["tipocomision"] = []
 
         # Map field names to match database schema
         mapped_cajero = {
             "NOMBRE": cajero.get("nombre"),
             "ID": cajero.get("id"),
             "FARMACIAS": cajero.get("FARMACIAS"),
-            "comision": int(cajero.get("comision", 0)),
+            "comision": float(cajero.get("comision", 0)),
             "estado": cajero.get("estado"),
             "tipocomision": cajero.get("tipocomision", None),
         }
@@ -403,5 +402,78 @@ async def obtener_comisiones_por_turno(
 
         return resultados_totales
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/comisiones/especial")
+async def obtener_total_ventas_especial(
+    startDate: str = Query(...),
+    endDate: str = Query(...)
+):
+    try:
+        db = get_collection("CUADRES").database
+        colecciones = await db.list_collection_names()
+        colecciones_farmacias = [nombre for nombre in colecciones if nombre.startswith("CUADRES-")]
+
+        # Obtener todos los cajeros y mapear por farmacia
+        cajeros_collection = get_collection("CAJERO")
+        cajeros = await cajeros_collection.find({}).to_list(length=None)
+        # Mapeo: {codigo_farmacia: [cajero, ...]}
+        farmacias_cajeros = {}
+        for cajero in cajeros:
+            farmacias = cajero.get("FARMACIAS", {})
+            if isinstance(farmacias, dict):
+                for cod in farmacias.keys():
+                    if cod not in farmacias_cajeros:
+                        farmacias_cajeros[cod] = []
+                    farmacias_cajeros[cod].append(cajero)
+            elif isinstance(farmacias, list):
+                for cod in farmacias:
+                    if cod not in farmacias_cajeros:
+                        farmacias_cajeros[cod] = []
+                    farmacias_cajeros[cod].append(cajero)
+
+        cajeros_especiales = []
+        total_ventas_especial = 0
+
+        for nombre_coleccion in colecciones_farmacias:
+            codigo_farmacia = nombre_coleccion.replace("CUADRES-", "")
+            collection = db[nombre_coleccion]
+            pipeline = [
+                {
+                    "$match": {
+                        "dia": {"$gte": startDate, "$lte": endDate},
+                        "estado": "verified"
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": None,
+                        "totalVentas": {"$sum": {"$divide": ["$totalCajaSistemaBs", {"$ifNull": ["$tasa", 0]}]}},
+
+                        # "totalVentas": {"$sum": "$totalGeneralUsd"}
+                    }
+                }
+            ]
+            resultados = await collection.aggregate(pipeline).to_list(length=None)
+            total_farmacia = resultados[0]["totalVentas"] if resultados else 0
+            total_ventas_especial += total_farmacia
+
+            # Buscar cajero especial para esta farmacia
+            cajeros_farmacia = farmacias_cajeros.get(codigo_farmacia, [])
+            cajero_especial = next((c for c in cajeros_farmacia if "Especial" in (c.get("tipocomision") or [])), None)
+            if cajero_especial:
+                cajeros_especiales.append({
+                    "cajero": cajero_especial.get("NOMBRE"),
+                    "cajeroId": cajero_especial.get("ID"),
+                    "farmacias": cajero_especial.get("FARMACIAS", {}),
+                    "totalVentas": total_farmacia,
+                    "comisionPorcentaje": cajero_especial.get("comision", 0)
+                })
+
+        return {
+            "totalVentasEspecial": total_ventas_especial,
+            "cajeros": cajeros_especiales
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
