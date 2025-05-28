@@ -257,3 +257,122 @@ async def obtener_total_gastos_por_farmacia():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/cajeros")
+async def crear_cajero(cajero: dict = Body(...)):
+    try:
+        collection = get_collection("CAJERO")
+        cajero["comision"] = cajero.get("comision", 0)  # Default commission
+        cajero["estado"] = cajero.get("estado", "activo")  # Default state
+        result = await collection.insert_one(cajero)
+        return {"message": "Cajero creado exitosamente", "id": str(result.inserted_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/cajeros/{cajero_id}")
+async def actualizar_cajero(cajero_id: str, cajero: dict = Body(...)):
+    try:
+        collection = get_collection("CAJERO")
+        print(f"Actualizando cajero con ID: {cajero_id} con datos: {cajero}")
+
+        # Convert _id to ObjectId
+        try:
+            cajero["_id"] = ObjectId(cajero["_id"])
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid _id format")
+
+        # Map field names to match database schema
+        mapped_cajero = {
+            "NOMBRE": cajero.get("nombre"),
+            "ID": cajero.get("id"),
+            "FARMACIAS": cajero.get("FARMACIAS"),
+            "comision": int(cajero.get("comision", 0)),
+            "estado": cajero.get("estado")
+        }
+
+        # Perform the update
+        result = await collection.update_one(
+            {"_id": ObjectId(cajero_id)},
+            {"$set": mapped_cajero}
+        )
+        print(f"Resultado de la actualización: {result.raw_result}")
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Cajero no encontrado o sin cambios")
+        return {"message": "Cajero actualizado exitosamente"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/comisiones")
+async def obtener_comisiones_por_turno(
+    startDate: str = Query(...),
+    endDate: str = Query(...)
+):
+    try:
+        db = get_collection("CUADRES").database  # Obtenemos instancia de la base de datos
+        colecciones = await db.list_collection_names()
+        colecciones_farmacias = [nombre for nombre in colecciones if nombre.startswith("CUADRES-")]
+
+        resultados_totales = []
+
+        for nombre_coleccion in colecciones_farmacias:
+            collection = db[nombre_coleccion]
+
+            pipeline = [
+                {
+                    "$match": {
+                        "dia": {
+                            "$gte": startDate,
+                            "$lte": endDate,
+                        },
+                        "estado": "verified"  # Filtrar solo cuadres verificados
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": {
+                            "cajeroId": "$cajeroId",
+                            "turno": "$turno"
+                        },
+                        "totalVentas": {
+                            "$sum": "$totalGeneralUsd"
+                        }
+                    }
+                },
+                {
+                    "$lookup": {
+                        "from": "CAJERO",
+                        "localField": "_id.cajeroId",
+                        "foreignField": "ID",
+                        "as": "cajeroInfo",
+                    }
+                },
+                {"$unwind": "$cajeroInfo"},
+                {
+                    "$addFields": {
+                        "comisionPorcentaje": {
+                            "$toDouble": "$cajeroInfo.comision"  # Convertimos a número si viene como string
+                        }
+                    }
+                },
+                {
+                    "$project": {
+                        "cajero": "$cajeroInfo.NOMBRE",
+                        "turno": "$_id.turno",
+                        "totalVentas": 1,
+                        "comision": {
+                            "$divide": [
+                                { "$multiply": ["$totalVentas", "$comisionPorcentaje"] },
+                                100
+                            ]
+                        },
+                        "_id": 0
+                    }
+                }
+            ]
+
+            resultados = await collection.aggregate(pipeline).to_list(length=None)
+            resultados_totales.extend(resultados)
+
+        return resultados_totales
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
