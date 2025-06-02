@@ -1,8 +1,7 @@
+from app.core.config import SECRET_KEY, ALGORITHM
 from datetime import datetime, timedelta
 from jose import jwt
 
-SECRET_KEY = "30780142"
-ALGORITHM = "HS256"
 EXPIRATION_MINUTES = 60
 
 def crear_token_jwt(data: dict):

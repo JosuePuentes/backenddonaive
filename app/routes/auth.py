@@ -1,14 +1,14 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Body, Query, Depends
 from app.schemas.auth import LoginInput, Cuadre
 from app.services.users_service import login_y_token
-
-from fastapi import APIRouter, Query
-from typing import List, Optional
 from app.db.mongo import get_collection  # tu helper para acceder a la colección
 from bson import ObjectId
 from bson.errors import InvalidId
 from datetime import datetime
 from pydantic import BaseModel
+from typing import List, Optional
+from fastapi import Depends
+from app.core.get_current_user import get_current_user
 
 router = APIRouter()
 
@@ -18,6 +18,20 @@ class Gasto(BaseModel):
     descripcion: str
     localidad: str
     fecha: str
+
+class CuentaPorPagar(BaseModel):
+    fechaEmision: str
+    diasCredito: int
+    numeroFactura: str
+    numeroControl: str
+    proveedor: str
+    descripcion: str
+    monto: float
+    divisa: str
+    tasa: float
+    estatus: str = "activa"
+    usuarioCorreo: str
+    farmacia: str
 
 @router.get("/")
 async def root():
@@ -475,5 +489,49 @@ async def obtener_total_ventas_especial(
             "totalVentasEspecial": total_ventas_especial,
             "cajeros": cajeros_especiales
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/cuentas-por-pagar")
+async def agregar_cuenta_por_pagar(cuenta: CuentaPorPagar, usuario: dict = Depends(get_current_user)):
+    try:
+        collection = get_collection("CUENTAS_POR_PAGAR")
+        cuenta_dict = cuenta.dict()
+        cuenta_dict["fechaEmision"] = datetime.strptime(cuenta.fechaEmision, "%Y-%m-%d")
+        cuenta_dict["estatus"] = "activa"
+        cuenta_dict["usuarioCorreo"] = usuario.get("correo", "")
+        # Si el frontend no envía la farmacia, puedes obtener la principal del usuario aquí si es necesario
+        result = await collection.insert_one(cuenta_dict)
+        return {"message": "Cuenta por pagar registrada exitosamente", "id": str(result.inserted_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/cuentas-por-pagar")
+async def listar_cuentas_por_pagar(usuario: dict = Depends(get_current_user)):
+    print(usuario)
+    try:
+        collection = get_collection("CUENTAS_POR_PAGAR")
+        cuentas = await collection.find({}).to_list(length=None)
+        for c in cuentas:
+            c["_id"] = str(c["_id"])
+            if isinstance(c["fechaEmision"], datetime):
+                c["fechaEmision"] = c["fechaEmision"].strftime("%Y-%m-%d")
+        return cuentas
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/cuentas-por-pagar/{id}/estatus")
+async def actualizar_estatus_cuenta_por_pagar(id: str, data: dict = Body(...), usuario: dict = Depends(get_current_user)):
+    try:
+        nuevo_estatus = data.get("estatus")
+        if not nuevo_estatus:
+            raise HTTPException(status_code=400, detail="Falta el campo 'estatus'")
+        collection = get_collection("CUENTAS_POR_PAGAR")
+        result = await collection.update_one({"_id": ObjectId(id)}, {"$set": {"estatus": nuevo_estatus}})
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Cuenta por pagar no encontrada o sin cambios")
+        return {"message": f"Estatus actualizado a {nuevo_estatus}"}
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="ID inválido")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

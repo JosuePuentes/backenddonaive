@@ -18,6 +18,7 @@ async def login_y_token(correo, contraseña, return_user=False):
     if not usuario:
         return None
     token = crear_token_jwt({"sub": usuario["correo"]})
+    print(f"token:{token}")
     if return_user:
         return usuario, token
     return token
