@@ -344,22 +344,18 @@ async def obtener_comisiones_por_turno(
     endDate: str = Query(...)
 ): 
     try:
-        db = get_collection("CUADRES").database  # Obtenemos instancia de la base de datos
+        db = get_collection("CUADRES").database
         colecciones = await db.list_collection_names()
         colecciones_farmacias = [nombre for nombre in colecciones if nombre.startswith("CUADRES-")]
 
-        resultados_totales = []
+        comisiones_planas = []
 
         for nombre_coleccion in colecciones_farmacias:
             collection = db[nombre_coleccion]
-
             pipeline = [
                 {
                     "$match": {
-                        "dia": {
-                            "$gte": startDate,
-                            "$lte": endDate,
-                        },
+                        "dia": {"$gte": startDate, "$lte": endDate},
                         "estado": "verified"
                     }
                 },
@@ -373,49 +369,59 @@ async def obtener_comisiones_por_turno(
                 },
                 {"$unwind": "$cajeroInfo"},
                 {
-                    "$match": {
-                        "cajeroInfo.tipocomision": {"$in": ["Turno"]}
-                    }
-                },
-                {
-                    "$group": {
-                        "_id": {
-                            "cajeroId": "$cajeroId",
-                            "turno": "$turno"
-                        },
-                        # "totalVentas": {"$sum": {"$divide": ["$totalCajaSistemaBs", {"$ifNull": ["$tasa", 1]}]}},
-                        "totalVentas": {"$sum": "$totalGeneralUsd"},
-                        "totalSobrante": {"$sum": {"$ifNull": ["$sobranteUsd", 0]}},
-                        "totalFaltante": {"$sum": {"$ifNull": ["$faltanteUsd", 0]}},
-                        "cajero": {"$first": "$cajeroInfo.NOMBRE"},
-                        "comisionPorcentaje": {"$first": "$cajeroInfo.comision"},
-                        "farmacias": {"$first": "$cajeroInfo.FARMACIAS"}
-                    }
-                },
-                {
                     "$project": {
-                        "cajero": 1,
-                        "turno": "$_id.turno",
-                        "totalVentas": 1,
-                        "sobrante": "$totalSobrante",
-                        "faltante": "$totalFaltante",
-                        "comision": {
-                            "$divide": [
-                                { "$multiply": ["$totalVentas", {"$toDouble": "$comisionPorcentaje"}] },
-                                100
-                            ]
-                        },
-                        "farmacias": 1,
-                        "_id": 0
+                        "turno": 1,
+                        "dia": 1,
+                        "totalVentas": {"$divide": ["$totalCajaSistemaBs", {"$ifNull": ["$tasa", 1]}]},
+                        "nombre": "$cajeroInfo.NOMBRE",
+                        "cajeroId": "$cajeroId",
+                        "farmacias": "$cajeroInfo.FARMACIAS",
+                        "comisionPorcentaje": "$cajeroInfo.comision",
+                        "tipocomision": "$cajeroInfo.tipocomision",
+                        "sobrante": {"$ifNull": ["$sobranteUsd", 0]},
+                        "faltante": {"$ifNull": ["$faltanteUsd", 0]}
                     }
                 }
             ]
-
             resultados = await collection.aggregate(pipeline).to_list(length=None)
-            resultados_totales.extend(resultados)
-
-        return resultados_totales
-
+            # Agrupar por (turno, dia) para sumar ventas y obtener cajeros únicos
+            agrupados = {}
+            for r in resultados:
+                if r.get("tipocomision") and ("Turno" in r["tipocomision"] if isinstance(r["tipocomision"], list) else r["tipocomision"] == "Turno"):
+                    key = (r["turno"], r["dia"])
+                    if key not in agrupados:
+                        agrupados[key] = {"totalVentas": 0, "cajeros": []}
+                    agrupados[key]["totalVentas"] += r["totalVentas"]
+                    agrupados[key]["cajeros"].append({
+                        "NOMBRE": r.get("nombre"),
+                        "cajeroId": r.get("cajeroId"),
+                        "farmacias": r.get("farmacias"),
+                        "comisionPorcentaje": r.get("comisionPorcentaje"),
+                        "turno": r.get("turno"),
+                        "dia": r.get("dia"),
+                        "sobrante": r.get("sobrante", 0),
+                        "faltante": r.get("faltante", 0)
+                    })
+            # Para cada grupo, asignar la misma comisión a todos los cajeros, restando faltante al total vendido individual
+            for (turno, dia), data in agrupados.items():
+                total_ventas = data["totalVentas"]
+                comision_porcentaje = data["cajeros"][0]["comisionPorcentaje"] if data["cajeros"] else 0
+                comision = (total_ventas * float(comision_porcentaje or 0)) / 100
+                for cajero in data["cajeros"]:
+                    total_vendido_cajero = total_ventas - float(cajero.get("faltante", 0) or 0)
+                    comisiones_planas.append({
+                        "NOMBRE": cajero["NOMBRE"],
+                        "cajeroId": cajero["cajeroId"],
+                        "farmacias": cajero["farmacias"],
+                        "comisionPorcentaje": cajero["comisionPorcentaje"],
+                        "turno": cajero["turno"],
+                        "dia": cajero["dia"],
+                        "totalVentas": total_vendido_cajero,
+                        "comision": comision,
+                        "sobrante": cajero.get("sobrante", 0),
+                        "faltante": cajero.get("faltante", 0)
+                    })
+        return comisiones_planas
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
