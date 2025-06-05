@@ -33,6 +33,13 @@ class CuentaPorPagar(BaseModel):
     usuarioCorreo: str
     farmacia: str
 
+class Inventario(BaseModel):
+    farmacia: str
+    costo: float
+    usuarioCorreo: str
+    fecha: Optional[str] = None  # Ahora es opcional
+    estado: str = "activo"  # Nuevo campo con valor por defecto
+
 @router.get("/")
 async def root():
     return {"message": "API funcionando"}
@@ -152,12 +159,17 @@ async def actualizar_estado_cuadre(farmacia_id: str, dia: str, cajaNumero: int, 
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.patch("/cuadres/{farmacia_id}/{cuadre_id}/estado")
-async def actualizar_estado_cuadre_por_id(farmacia_id: str, cuadre_id: str, estado: str = Body(..., embed=True)):
+async def actualizar_estado_cuadre_por_id(farmacia_id: str, cuadre_id: str, data: dict = Body(...)):
     try:
+        estado = data.get("estado")
+        costo = data.get("costo", None)
+        update_fields = {"estado": estado}
+        if costo is not None:
+            update_fields["costo"] = float(costo)
         collection = get_collection(f"CUADRES-{farmacia_id}")
         result = await collection.update_one(
             {"_id": ObjectId(cuadre_id)},
-            {"$set": {"estado": estado}}
+            {"$set": update_fields}
         )
         if result.modified_count == 0:
             raise HTTPException(status_code=404, detail="Cuadre no encontrado o sin cambios")
@@ -537,6 +549,48 @@ async def actualizar_estatus_cuenta_por_pagar(id: str, data: dict = Body(...), u
         if result.modified_count == 0:
             raise HTTPException(status_code=404, detail="Cuenta por pagar no encontrada o sin cambios")
         return {"message": f"Estatus actualizado a {nuevo_estatus}"}
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="ID inválido")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/inventarios")
+async def agregar_inventario(data: Inventario, usuario: dict = Depends(get_current_user)):
+    print(f"Usuario actual: {usuario}")
+    print(f"Datos del inventario: {data}")
+    try:
+        collection = get_collection("INVENTARIOS")
+        inventario_dict = data.dict()
+        inventario_dict["usuarioCorreo"] = usuario.get("usuarioCorreo", data.usuarioCorreo)
+        inventario_dict["fecha"] = datetime.now().strftime("%Y-%m-%d")
+        inventario_dict["estado"] = "activo"  # Siempre activo al crear
+        result = await collection.insert_one(inventario_dict)
+        return {"message": "Inventario registrado exitosamente", "id": str(result.inserted_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/inventarios")
+async def listar_inventarios(usuario: dict = Depends(get_current_user)):
+    try:
+        collection = get_collection("INVENTARIOS")
+        inventarios = await collection.find({}).to_list(length=None)
+        for inv in inventarios:
+            inv["_id"] = str(inv["_id"])
+        return inventarios
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.patch("/inventarios/{id}/estado")
+async def actualizar_estado_inventario(id: str, data: dict = Body(...), usuario: dict = Depends(get_current_user)):
+    try:
+        nuevo_estado = data.get("estado")
+        if not nuevo_estado:
+            raise HTTPException(status_code=400, detail="Falta el campo 'estado'")
+        collection = get_collection("INVENTARIOS")
+        result = await collection.update_one({"_id": ObjectId(id)}, {"$set": {"estado": nuevo_estado}})
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Inventario no encontrado o sin cambios")
+        return {"message": f"Estado actualizado a {nuevo_estado}"}
     except InvalidId:
         raise HTTPException(status_code=400, detail="ID inválido")
     except Exception as e:

@@ -14,7 +14,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
+.env
 # pipenv
 Pipfile.lock
 
