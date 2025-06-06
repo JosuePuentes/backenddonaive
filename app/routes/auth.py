@@ -18,6 +18,8 @@ class Gasto(BaseModel):
     descripcion: str
     localidad: str
     fecha: str
+    tasa: Optional[float] = None
+    divisa: Optional[str] = None
 
 class CuentaPorPagar(BaseModel):
     fechaEmision: str
@@ -524,6 +526,7 @@ async def agregar_cuenta_por_pagar(cuenta: CuentaPorPagar, usuario: dict = Depen
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/cuentas-por-pagar")
 async def listar_cuentas_por_pagar(usuario: dict = Depends(get_current_user)):
     print(usuario)
@@ -534,6 +537,15 @@ async def listar_cuentas_por_pagar(usuario: dict = Depends(get_current_user)):
             c["_id"] = str(c["_id"])
             if isinstance(c["fechaEmision"], datetime):
                 c["fechaEmision"] = c["fechaEmision"].strftime("%Y-%m-%d")
+            # Normaliza monto a USD
+            if c.get("divisa") == "Bs":
+                try:
+                    tasa = float(c.get("tasa", 1)) or 1
+                    c["montoUsd"] = float(c["monto"]) / tasa
+                except Exception:
+                    c["montoUsd"] = 0
+            else:
+                c["montoUsd"] = float(c["monto"])
         return cuentas
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
