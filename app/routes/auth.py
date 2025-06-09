@@ -484,8 +484,6 @@ async def obtener_total_ventas_especial(
                     "$group": {
                         "_id": None,
                         "totalVentas": {"$sum": {"$divide": ["$totalCajaSistemaBs", {"$ifNull": ["$tasa", 0]}]}},
-
-                        # "totalVentas": {"$sum": "$totalGeneralUsd"}
                     }
                 }
             ]
@@ -493,10 +491,12 @@ async def obtener_total_ventas_especial(
             total_farmacia = resultados[0]["totalVentas"] if resultados else 0
             total_ventas_especial += total_farmacia
 
-            # Buscar cajero especial para esta farmacia
+            # Buscar TODOS los cajeros especiales para esta farmacia
             cajeros_farmacia = farmacias_cajeros.get(codigo_farmacia, [])
-            cajero_especial = next((c for c in cajeros_farmacia if "Especial" in (c.get("tipocomision") or [])), None)
-            if cajero_especial:
+            cajeros_especiales_farmacia = [
+                c for c in cajeros_farmacia if "Especial" in (c.get("tipocomision") or [])
+            ]
+            for cajero_especial in cajeros_especiales_farmacia:
                 cajeros_especiales.append({
                     "cajero": cajero_especial.get("NOMBRE"),
                     "cajeroId": cajero_especial.get("ID"),

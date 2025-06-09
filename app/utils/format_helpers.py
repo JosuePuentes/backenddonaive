@@ -72,7 +72,7 @@ async def main():
     "06": "San Martin",
     "07": "Milagro Norte"
   }
-        nuevo = await crear_usuario_con_farmacias("anubis1977puentes@gmail.com", "14117284", farmacias)
+        nuevo = await crear_usuario_con_farmacias("eversstevens@gmail.com", "Aminda7*", farmacias)
         print("Usuario creado:", nuevo)
     except ValueError as e:
         print("Error:", str(e))
