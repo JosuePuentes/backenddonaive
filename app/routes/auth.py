@@ -231,7 +231,9 @@ async def agregar_gasto(gasto: Gasto):
     try:
         collection = get_collection("GASTOS")
         gasto_dict = gasto.dict()
-        gasto_dict["fecha"] = datetime.strptime(gasto.fecha, "%Y-%m-%d")
+        venezuela_tz = pytz.timezone("America/Caracas")
+        now_ve = datetime.now(venezuela_tz)
+        gasto_dict["fecha"] = now_ve.strftime("%Y-%m-%d")
         # Add default estado field
         gasto_dict["estado"] = "wait"
         result = await collection.insert_one(gasto_dict)
@@ -540,7 +542,9 @@ async def agregar_cuenta_por_pagar(cuenta: CuentaPorPagar, usuario: dict = Depen
     try:
         collection = get_collection("CUENTAS_POR_PAGAR")
         cuenta_dict = cuenta.dict()
-        cuenta_dict["fechaEmision"] = datetime.strptime(cuenta.fechaEmision, "%Y-%m-%d")
+        venezuela_tz = pytz.timezone("America/Caracas")
+        now_ve = datetime.now(venezuela_tz)
+        cuenta_dict["fechaEmision"] = now_ve.strftime("%Y-%m-%d")
         if cuenta.fechaRecepcion:
             cuenta_dict["fechaRecepcion"] = datetime.strptime(cuenta.fechaRecepcion, "%Y-%m-%d")
         else:
@@ -602,7 +606,9 @@ async def agregar_inventario(data: Inventario, usuario: dict = Depends(get_curre
         collection = get_collection("INVENTARIOS")
         inventario_dict = data.dict()
         inventario_dict["usuarioCorreo"] = usuario.get("usuarioCorreo", data.usuarioCorreo)
-        inventario_dict["fecha"] = datetime.now().strftime("%Y-%m-%d")
+        venezuela_tz = pytz.timezone("America/Caracas")
+        now_ve = datetime.now(venezuela_tz)
+        inventario_dict["fecha"] = now_ve.strftime("%Y-%m-%d")
         inventario_dict["estado"] = "activo"  # Siempre activo al crear
         result = await collection.insert_one(inventario_dict)
         return {"message": "Inventario registrado exitosamente", "id": str(result.inserted_id)}
