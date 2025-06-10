@@ -551,7 +551,7 @@ async def listar_cuentas_por_pagar(usuario: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.patch("/cuentas-por-pagar/{id}/estatus")
-async def actualizar_estatus_cuenta_por_pagar(id: str, data: dict = Body(...), usuario: dict = Depends(get_current_user)):
+async def actualizar_estatus_cuenta_por_pagar(id: str, data: dict = Body(...), usuario: dict):
     try:
         nuevo_estatus = data.get("estatus")
         if not nuevo_estatus:
