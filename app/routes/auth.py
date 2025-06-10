@@ -24,12 +24,14 @@ class Gasto(BaseModel):
 
 class CuentaPorPagar(BaseModel):
     fechaEmision: str
+    fechaRecepcion: Optional[str] = None  # Nueva fecha de recepción
     diasCredito: int
     numeroFactura: str
     numeroControl: str
     proveedor: str
     descripcion: str
     monto: float
+    retencion: Optional[float] = 0  # Nuevo campo retención
     divisa: str
     tasa: float
     estatus: str = "activa"
@@ -539,9 +541,12 @@ async def agregar_cuenta_por_pagar(cuenta: CuentaPorPagar, usuario: dict = Depen
         collection = get_collection("CUENTAS_POR_PAGAR")
         cuenta_dict = cuenta.dict()
         cuenta_dict["fechaEmision"] = datetime.strptime(cuenta.fechaEmision, "%Y-%m-%d")
-        cuenta_dict["estatus"] = "activa"
+        if cuenta.fechaRecepcion:
+            cuenta_dict["fechaRecepcion"] = datetime.strptime(cuenta.fechaRecepcion, "%Y-%m-%d")
+        else:
+            cuenta_dict["fechaRecepcion"] = None
+        cuenta_dict["estatus"] = "wait"
         cuenta_dict["usuarioCorreo"] = usuario.get("correo", "")
-        # Si el frontend no envía la farmacia, puedes obtener la principal del usuario aquí si es necesario
         result = await collection.insert_one(cuenta_dict)
         return {"message": "Cuenta por pagar registrada exitosamente", "id": str(result.inserted_id)}
     except Exception as e:
@@ -558,6 +563,8 @@ async def listar_cuentas_por_pagar(usuario: dict = Depends(get_current_user)):
             c["_id"] = str(c["_id"])
             if isinstance(c["fechaEmision"], datetime):
                 c["fechaEmision"] = c["fechaEmision"].strftime("%Y-%m-%d")
+            if "fechaRecepcion" in c and isinstance(c["fechaRecepcion"], datetime):
+                c["fechaRecepcion"] = c["fechaRecepcion"].strftime("%Y-%m-%d")
             # Normaliza monto a USD
             if c.get("divisa") == "Bs":
                 try:
