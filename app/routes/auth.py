@@ -231,7 +231,9 @@ async def agregar_gasto(gasto: Gasto):
     try:
         collection = get_collection("GASTOS")
         gasto_dict = gasto.dict()
-        gasto_dict["fecha"] = datetime.strptime(gasto.fecha, "%Y-%m-%d")
+        # Siempre usar la fecha actual de Venezuela, ignorando la enviada por el usuario
+        venezuela_tz = pytz.timezone("America/Caracas")
+        gasto_dict["fecha"] = datetime.now(venezuela_tz)
         # Add default estado field
         gasto_dict["estado"] = "wait"
         result = await collection.insert_one(gasto_dict)
@@ -261,7 +263,15 @@ async def obtener_gastos(
         resultados = await collection.find(filtro).to_list(1000)
         for r in resultados:
             r["_id"] = str(r["_id"])
-            r["fecha"] = r["fecha"].strftime("%Y-%m-%d")
+            # Manejar fecha como datetime o string
+            if isinstance(r["fecha"], datetime):
+                r["fecha"] = r["fecha"].strftime("%Y-%m-%d")
+            elif isinstance(r["fecha"], str):
+                # Si ya es string, intenta formatear a YYYY-MM-DD si es posible
+                try:
+                    r["fecha"] = datetime.strptime(r["fecha"], "%Y-%m-%d").strftime("%Y-%m-%d")
+                except Exception:
+                    pass  # Dejar el string como está si no se puede parsear
 
         return resultados
     except Exception as e:
