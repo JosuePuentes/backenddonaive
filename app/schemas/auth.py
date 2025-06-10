@@ -34,3 +34,6 @@ class Cuadre(BaseModel):
     delete: Optional[bool] = False
     estado: Optional[str] = 'wait'
     nombreFarmacia: Optional[str] = None
+    costoInventario: float  # Nuevo campo obligatorio
+    fecha: Optional[str] = None  # Fecha (solo fecha)
+    hora: Optional[str] = None   # Hora (solo hora)

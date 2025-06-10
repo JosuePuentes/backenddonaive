@@ -4,7 +4,8 @@ from app.services.users_service import login_y_token
 from app.db.mongo import get_collection  # tu helper para acceder a la colección
 from bson import ObjectId
 from bson.errors import InvalidId
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 from pydantic import BaseModel
 from typing import List, Optional
 from fastapi import Depends
@@ -109,6 +110,11 @@ async def agregar_cuadre(farmacia: str, cuadre: Cuadre):
         cuadre_dict["faltanteUsd"] = abs(diferencia) if diferencia < 0 else 0
         # puntosVenta ya viene como array de objetos
         cuadre_dict["cajeroId"] = cuadre.cajeroId  # Store the cashier's ID
+        # Agregar fecha y hora actual de Venezuela
+        venezuela_tz = pytz.timezone("America/Caracas")
+        now_ve = datetime.now(venezuela_tz)
+        cuadre_dict["fecha"] = now_ve.strftime("%Y-%m-%d")
+        cuadre_dict["hora"] = now_ve.strftime("%H:%M:%S")
         result = collection.insert_one(cuadre_dict)
         return {"message": "Cuadre guardado", "result": str(result)}
     except Exception as e:
@@ -119,9 +125,24 @@ async def agregar_cuadre(cuadre: Cuadre):
     try:
         collection = get_collection("CUADRES")
         cuadre_dict = cuadre.dict()
-        cuadre_dict["fecha"] = datetime.strptime(cuadre.fecha, "%Y-%m-%d")
-        # Add default estado field
+        # Si viene 'dia' del frontend, guárdalo como 'fechaCajero', pero NO como 'dia' del cuadre
+        if hasattr(cuadre, 'dia') and cuadre.dia:
+            cuadre_dict["fechaCajero"] = cuadre.dia  # día que seleccionó el cajero
+        else:
+            cuadre_dict["fechaCajero"] = datetime.now().strftime("%Y-%m-%d")
+        # El campo 'dia' real del cuadre es la fecha actual de Venezuela
+        venezuela_tz = pytz.timezone("America/Caracas")
+        now_ve = datetime.now(venezuela_tz)
+        cuadre_dict["dia"] = now_ve.strftime("%Y-%m-%d")
+        # Hora
+        if hasattr(cuadre, 'hora') and cuadre.hora:
+            cuadre_dict["hora"] = cuadre.hora
+        else:
+            cuadre_dict["hora"] = now_ve.strftime("%H:%M:%S")
         cuadre_dict["estado"] = "wait"
+        # Eliminar el campo 'fecha' si existe para evitar duplicidad
+        if "fecha" in cuadre_dict:
+            del cuadre_dict["fecha"]
         result = await collection.insert_one(cuadre_dict)
         return {"message": "Cuadre agregado exitosamente", "id": str(result.inserted_id)}
     except Exception as e:
@@ -551,7 +572,7 @@ async def listar_cuentas_por_pagar(usuario: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.patch("/cuentas-por-pagar/{id}/estatus")
-async def actualizar_estatus_cuenta_por_pagar(id: str, data: dict = Body(...), usuario: dict):
+async def actualizar_estatus_cuenta_por_pagar(id: str, data: dict = Body(...)):
     try:
         nuevo_estatus = data.get("estatus")
         if not nuevo_estatus:
