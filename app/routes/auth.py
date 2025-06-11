@@ -48,7 +48,9 @@ class Gasto(BaseModel):
 
 class CuentaPorPagar(BaseModel):
     fechaEmision: str
-    fechaRecepcion: Optional[str] = None  # Nueva fecha de recepción
+    fechaRecepcion: Optional[str] = None
+    fechaVencimiento: Optional[str] = None  # Nuevo campo
+    fechaRegistro: Optional[str] = None     # Nuevo campo
     diasCredito: int
     numeroFactura: str
     numeroControl: str
@@ -61,6 +63,7 @@ class CuentaPorPagar(BaseModel):
     estatus: str = "activa"
     usuarioCorreo: str
     farmacia: str
+    imagenesCuentaPorPagar: List[str] = []  # <-- Añadir este campo
 
 class Inventario(BaseModel):
     farmacia: str
@@ -600,13 +603,32 @@ async def agregar_cuenta_por_pagar(cuenta: CuentaPorPagar, usuario: dict = Depen
     try:
         collection = get_collection("CUENTAS_POR_PAGAR")
         cuenta_dict = cuenta.dict()
+        # Convertir fechas a datetime si es necesario
         cuenta_dict["fechaEmision"] = datetime.strptime(cuenta.fechaEmision, "%Y-%m-%d")
         if cuenta.fechaRecepcion:
             cuenta_dict["fechaRecepcion"] = datetime.strptime(cuenta.fechaRecepcion, "%Y-%m-%d")
+        if cuenta.fechaVencimiento:
+            cuenta_dict["fechaVencimiento"] = datetime.strptime(cuenta.fechaVencimiento, "%Y-%m-%d")
+        # Fecha de registro: si viene, úsala, si no, pon la actual
+        if cuenta.fechaRegistro:
+            cuenta_dict["fechaRegistro"] = datetime.strptime(cuenta.fechaRegistro, "%Y-%m-%d")
         else:
-            cuenta_dict["fechaRecepcion"] = None
+            venezuela_tz = pytz.timezone("America/Caracas")
+            cuenta_dict["fechaRegistro"] = datetime.now(venezuela_tz)
         cuenta_dict["estatus"] = "wait"
         cuenta_dict["usuarioCorreo"] = usuario.get("correo", "")
+        # Validación robusta de imagenesCuentaPorPagar
+        imagenes = cuenta_dict.get("imagenesCuentaPorPagar", None)
+        if imagenes is not None:
+            if isinstance(imagenes, list):
+                imagenes = [x for x in imagenes if isinstance(x, str) and x.strip()]
+            else:
+                imagenes = []
+            if len(imagenes) > 3:
+                raise HTTPException(status_code=400, detail="El campo 'imagenesCuentaPorPagar' debe tener máximo 3 imágenes.")
+            cuenta_dict["imagenesCuentaPorPagar"] = imagenes
+        else:
+            cuenta_dict["imagenesCuentaPorPagar"] = []
         result = await collection.insert_one(cuenta_dict)
         return {"message": "Cuenta por pagar registrada exitosamente", "id": str(result.inserted_id)}
     except Exception as e:
