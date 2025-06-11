@@ -37,3 +37,4 @@ class Cuadre(BaseModel):
     costoInventario: float  # Nuevo campo obligatorio
     fecha: Optional[str] = None  # Fecha (solo fecha)
     hora: Optional[str] = None   # Hora (solo hora)
+    valesUsd: Optional[float] = 0  # Permitir decimales y valor por defecto 0

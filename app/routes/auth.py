@@ -117,6 +117,10 @@ async def agregar_cuadre(farmacia: str, cuadre: Cuadre):
         now_ve = datetime.now(venezuela_tz)
         cuadre_dict["fecha"] = now_ve.strftime("%Y-%m-%d")
         cuadre_dict["hora"] = now_ve.strftime("%H:%M:%S")
+        # Validar que valesUsd esté presente (si no, poner 0)
+        if "valesUsd" not in cuadre_dict or cuadre_dict["valesUsd"] is None:
+            cuadre_dict["valesUsd"] = 0
+        print("Cuadre dict a guardar:", cuadre_dict)  # Para depuración
         result = collection.insert_one(cuadre_dict)
         return {"message": "Cuadre guardado", "result": str(result)}
     except Exception as e:
