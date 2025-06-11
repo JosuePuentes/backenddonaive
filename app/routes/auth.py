@@ -10,6 +10,30 @@ from pydantic import BaseModel
 from typing import List, Optional
 from fastapi import Depends
 from app.core.get_current_user import get_current_user
+import os
+import boto3
+from botocore.config import Config
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Configuración de Cloudflare R2 desde variables de entorno
+R2_BUCKET = os.getenv("VITE_R2_BUCKET")
+R2_ACCOUNT_ID = os.getenv("VITE_R2_ACCOUNT_ID")
+R2_ACCESS_KEY_ID = os.getenv("VITE_R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = os.getenv("VITE_R2_SECRET_ACCESS_KEY")
+R2_ENDPOINT_URL = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+s3_client = boto3.client(
+    "s3",
+    endpoint_url=R2_ENDPOINT_URL,
+    aws_access_key_id=R2_ACCESS_KEY_ID,
+    aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+    region_name="auto",
+    config=Config(signature_version="s3v4")
+)
 
 router = APIRouter()
 
@@ -110,8 +134,7 @@ async def agregar_cuadre(farmacia: str, cuadre: Cuadre):
         diferencia = cuadre_dict.get("diferenciaUsd", 0)
         cuadre_dict["sobranteUsd"] = diferencia if diferencia > 0 else 0
         cuadre_dict["faltanteUsd"] = abs(diferencia) if diferencia < 0 else 0
-        # puntosVenta ya viene como array de objetos
-        cuadre_dict["cajeroId"] = cuadre.cajeroId  # Store the cashier's ID
+        cuadre_dict["cajeroId"] = cuadre.cajeroId
         # Agregar fecha y hora actual de Venezuela
         venezuela_tz = pytz.timezone("America/Caracas")
         now_ve = datetime.now(venezuela_tz)
@@ -120,7 +143,17 @@ async def agregar_cuadre(farmacia: str, cuadre: Cuadre):
         # Validar que valesUsd esté presente (si no, poner 0)
         if "valesUsd" not in cuadre_dict or cuadre_dict["valesUsd"] is None:
             cuadre_dict["valesUsd"] = 0
-        print("Cuadre dict a guardar:", cuadre_dict)  # Para depuración
+        # Eliminar campo imagenCuadre si existe (deprecated)
+        if "imagenCuadre" in cuadre_dict:
+            cuadre_dict.pop("imagenCuadre")
+        # Limpieza robusta de imagenesCuadre antes de validar
+        imagenes = cuadre_dict.get("imagenesCuadre", None)
+        if isinstance(imagenes, list):
+            imagenes = [x for x in imagenes if isinstance(x, str) and x.strip()]
+            cuadre_dict["imagenesCuadre"] = imagenes
+        if not isinstance(imagenes, list) or not (1 <= len(imagenes) <= 3):
+            raise HTTPException(status_code=400, detail="El campo 'imagenesCuadre' debe ser un array de 1 a 3 strings no vacíos.")
+        # ...existing code...
         result = collection.insert_one(cuadre_dict)
         return {"message": "Cuadre guardado", "result": str(result)}
     except Exception as e:
@@ -133,9 +166,9 @@ async def agregar_cuadre(cuadre: Cuadre):
         cuadre_dict = cuadre.dict()
         # Si viene 'dia' del frontend, guárdalo como 'fechaCajero', pero NO como 'dia' del cuadre
         if hasattr(cuadre, 'dia') and cuadre.dia:
-            cuadre_dict["fechaCajero"] = cuadre.dia  # día que seleccionó el cajero
+            cuadre_dict["fechaCajero"] = cuadre.dia
         else:
-            cuadre_dict["fechaCajero"] = datetime.now().strftime("%Y-%m-%d")
+            cuadre_dict["fechaCajero"] = None
         # El campo 'dia' real del cuadre es la fecha actual de Venezuela
         venezuela_tz = pytz.timezone("America/Caracas")
         now_ve = datetime.now(venezuela_tz)
@@ -148,7 +181,17 @@ async def agregar_cuadre(cuadre: Cuadre):
         cuadre_dict["estado"] = "wait"
         # Eliminar el campo 'fecha' si existe para evitar duplicidad
         if "fecha" in cuadre_dict:
-            del cuadre_dict["fecha"]
+            cuadre_dict.pop("fecha")
+        # Eliminar campo imagenCuadre si existe (deprecated)
+        if "imagenCuadre" in cuadre_dict:
+            cuadre_dict.pop("imagenCuadre")
+        # Limpieza robusta de imagenesCuadre antes de validar
+        imagenes = cuadre_dict.get("imagenesCuadre", None)
+        if isinstance(imagenes, list):
+            imagenes = [x for x in imagenes if isinstance(x, str) and x.strip()]
+            cuadre_dict["imagenesCuadre"] = imagenes
+        if not isinstance(imagenes, list) or not (1 <= len(imagenes) <= 3):
+            raise HTTPException(status_code=400, detail="El campo 'imagenesCuadre' debe ser un array de 1 a 3 strings no vacíos.")
         result = await collection.insert_one(cuadre_dict)
         return {"message": "Cuadre agregado exitosamente", "id": str(result.inserted_id)}
     except Exception as e:
@@ -652,3 +695,46 @@ async def actualizar_estado_inventario(id: str, data: dict = Body(...), usuario:
         raise HTTPException(status_code=400, detail="ID inválido")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/presigned-url")
+async def get_presigned_url(request: Request):
+    """
+    Endpoint para generar una URL prefirmada para Cloudflare R2.
+    """
+    data = await request.json()
+    object_name = data.get('object_name')
+    operation = data.get('operation', 'get_object')
+    expires_in = data.get('expires_in', 3600)
+    content_type = data.get('content_type')
+
+    if not object_name:
+        return JSONResponse(status_code=400, content={"error": "Missing 'object_name' in request body"})
+
+    try:
+        if operation == 'get_object':
+            presigned_url = s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': R2_BUCKET,
+                    'Key': object_name
+                },
+                ExpiresIn=expires_in
+            )
+        elif operation == 'put_object':
+            if not content_type:
+                return JSONResponse(status_code=400, content={"error": "For 'put_object' operation, 'content_type' is required."})
+            presigned_url = s3_client.generate_presigned_url(
+                'put_object',
+                Params={
+                    'Bucket': R2_BUCKET,
+                    'Key': object_name,
+                    'ContentType': content_type
+                },
+                ExpiresIn=expires_in
+            )
+        else:
+            return JSONResponse(status_code=400, content={"error": "Invalid 'operation'. Must be 'get_object' or 'put_object'."})
+        return {"presigned_url": presigned_url}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Failed to generate presigned URL: {str(e)}"})
+

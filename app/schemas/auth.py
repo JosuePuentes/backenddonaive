@@ -38,3 +38,5 @@ class Cuadre(BaseModel):
     fecha: Optional[str] = None  # Fecha (solo fecha)
     hora: Optional[str] = None   # Hora (solo hora)
     valesUsd: Optional[float] = 0  # Permitir decimales y valor por defecto 0
+    imagenesCuadre: Optional[List[str]] = None  # Nombres de los objetos de imagen en R2 (hasta 3)
+    # imagenCuadre: Optional[str] = None  # DEPRECATED: Usar imagenesCuadre
