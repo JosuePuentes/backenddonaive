@@ -502,13 +502,12 @@ async def obtener_comisiones_por_turno(
                         "sobrante": r.get("sobrante", 0),
                         "faltante": r.get("faltante", 0)
                     })
-            # Para cada grupo, asignar la misma comisión a todos los cajeros, restando faltante al total vendido individual
+            # Para cada grupo, calcular la venta total del turno y aplicar el porcentaje de comisión INDIVIDUAL de cada cajero
             for (turno, dia), data in agrupados.items():
                 total_ventas = data["totalVentas"]
-                comision_porcentaje = data["cajeros"][0]["comisionPorcentaje"] if data["cajeros"] else 0
-                comision = (total_ventas * float(comision_porcentaje or 0)) / 100
                 for cajero in data["cajeros"]:
-                    total_vendido_cajero = total_ventas - float(cajero.get("faltante", 0) or 0)
+                    comision_porcentaje = float(cajero.get("comisionPorcentaje") or 0)
+                    comision = (total_ventas * comision_porcentaje) / 100
                     comisiones_planas.append({
                         "NOMBRE": cajero["NOMBRE"],
                         "cajeroId": cajero["cajeroId"],
@@ -516,7 +515,7 @@ async def obtener_comisiones_por_turno(
                         "comisionPorcentaje": cajero["comisionPorcentaje"],
                         "turno": cajero["turno"],
                         "dia": cajero["dia"],
-                        "totalVentas": total_vendido_cajero,
+                        "totalVentas": total_ventas,
                         "comision": comision,
                         "sobrante": cajero.get("sobrante", 0),
                         "faltante": cajero.get("faltante", 0)
