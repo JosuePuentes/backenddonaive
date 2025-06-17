@@ -598,7 +598,7 @@ async def obtener_total_ventas_especial(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/cuentas-por-pagar")
-async def agregar_cuenta_por_pagar(cuenta: CuentaPorPagar, usuario: dict = Depends(get_current_user)):
+async def agregar_cuenta_por_pagar(cuenta: CuentaPorPagar):
     try:
         collection = get_collection("CUENTAS_POR_PAGAR")
         cuenta_dict = cuenta.dict()
