@@ -42,9 +42,11 @@ class Gasto(BaseModel):
     titulo: str
     descripcion: str
     localidad: str
-    fecha: str
+    fecha: str  # Fecha de gasto (ej: "2025-06-23")
     tasa: Optional[float] = None
     divisa: Optional[str] = None
+    fechaRegistro: Optional[datetime] = None  # Fecha de registro real (datetime)
+    estado: str = "wait"
 
 class CuentaPorPagar(BaseModel):
     fechaEmision: str
@@ -284,9 +286,8 @@ async def agregar_gasto(gasto: Gasto):
         # Guardar la fecha de registro (Venezuela) y la fecha enviada por el usuario
         venezuela_tz = pytz.timezone("America/Caracas")
         gasto_dict["fechaRegistro"] = datetime.now(venezuela_tz)
-        gasto_dict["fecha"] = gasto.fecha  # La fecha que envía el usuario (string)
-        # Add default estado field
-        gasto_dict["estado"] = "wait"
+        # fecha ya viene como string ("2025-06-23")
+        gasto_dict["estado"] = gasto_dict.get("estado", "wait")
         result = await collection.insert_one(gasto_dict)
         return {"message": "Gasto agregado exitosamente", "id": str(result.inserted_id)}
     except Exception as e:
@@ -301,31 +302,13 @@ async def obtener_gastos(
     try:
         collection = get_collection("GASTOS")
         filtro = {}
-
         if localidad:
             filtro["localidad"] = localidad
-
         if fecha_inicio and fecha_fin:
-            filtro["fecha"] = {
-                "$gte": datetime.strptime(fecha_inicio, "%Y-%m-%d"),
-                "$lte": datetime.strptime(fecha_fin, "%Y-%m-%d")
-            }
-
+            filtro["fecha"] = {"$gte": fecha_inicio, "$lte": fecha_fin}
         resultados = await collection.find(filtro).to_list(1000)
         for r in resultados:
             r["_id"] = str(r["_id"])
-            # Formatear fechaRegistro si existe y es datetime
-            if "fechaRegistro" in r and isinstance(r["fechaRegistro"], datetime):
-                r["fechaRegistro"] = r["fechaRegistro"].strftime("%Y-%m-%d %H:%M:%S")
-            # Formatear fecha (usuario) si es datetime
-            if "fecha" in r and isinstance(r["fecha"], datetime):
-                r["fecha"] = r["fecha"].strftime("%Y-%m-%d")
-            elif "fecha" in r and isinstance(r["fecha"], str):
-                try:
-                    r["fecha"] = datetime.strptime(r["fecha"], "%Y-%m-%d").strftime("%Y-%m-%d")
-                except Exception:
-                    pass  # Dejar el string como está si no se puede parsear
-
         return resultados
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
