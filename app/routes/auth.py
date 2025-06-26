@@ -285,14 +285,18 @@ async def agregar_gasto(gasto: Gasto):
     try:
         collection = get_collection("GASTOS")
         gasto_dict = gasto.dict()
-        # Limpieza robusta de imagenesGasto antes de guardar
-        if "imagenesGasto" in gasto_dict:
-            imagenes = gasto_dict["imagenesGasto"]
+        # Validación robusta de imagenesGasto
+        imagenes = gasto_dict.get("imagenesGasto", None)
+        if imagenes is not None:
             if isinstance(imagenes, list):
                 imagenes = [x for x in imagenes if isinstance(x, str) and x.strip()]
-                gasto_dict["imagenesGasto"] = imagenes
             else:
-                gasto_dict["imagenesGasto"] = []
+                imagenes = []
+            gasto_dict["imagenesGasto"] = imagenes
+            if not (1 <= len(imagenes) <= 3):
+                raise HTTPException(status_code=400, detail="El campo 'imagenesGasto' debe ser un array de 1 a 3 strings no vacíos.")
+        else:
+            gasto_dict["imagenesGasto"] = []
         # Guardar la fecha de registro (Venezuela) y la fecha enviada por el usuario
         venezuela_tz = pytz.timezone("America/Caracas")
         gasto_dict["fechaRegistro"] = datetime.now(venezuela_tz)
