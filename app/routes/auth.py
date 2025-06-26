@@ -47,6 +47,8 @@ class Gasto(BaseModel):
     divisa: Optional[str] = None
     fechaRegistro: Optional[datetime] = None  # Fecha de registro real (datetime)
     estado: str = "wait"
+    imagenGasto: Optional[str] = None
+    imagenesGasto: Optional[List[str]] = None
 
 class CuentaPorPagar(BaseModel):
     fechaEmision: str
@@ -283,6 +285,14 @@ async def agregar_gasto(gasto: Gasto):
     try:
         collection = get_collection("GASTOS")
         gasto_dict = gasto.dict()
+        # Limpieza robusta de imagenesGasto antes de guardar
+        if "imagenesGasto" in gasto_dict:
+            imagenes = gasto_dict["imagenesGasto"]
+            if isinstance(imagenes, list):
+                imagenes = [x for x in imagenes if isinstance(x, str) and x.strip()]
+                gasto_dict["imagenesGasto"] = imagenes
+            else:
+                gasto_dict["imagenesGasto"] = []
         # Guardar la fecha de registro (Venezuela) y la fecha enviada por el usuario
         venezuela_tz = pytz.timezone("America/Caracas")
         gasto_dict["fechaRegistro"] = datetime.now(venezuela_tz)
