@@ -19,4 +19,4 @@ app.add_middleware(
 
 app.include_router(example_router, prefix="/api/v1")
 app.include_router(auth.router)
-app.include_router(pagoscpp_router, prefix="/api")
+app.include_router(pagoscpp_router)
