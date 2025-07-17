@@ -104,3 +104,13 @@ async def crear_pagos_cpp_masivo(pagos: List[dict]):
         return {"message": "Pagos masivos registrados exitosamente", "ids": [str(_id) for _id in result.inserted_ids]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/pagoscpp/all")
+async def listar_todos_los_pagos_cpp():
+    try:
+        collection = get_collection("PAGOSCPP")
+        pagos = await collection.find({}).to_list(length=1000)
+        pagos = [pago_to_dict(p) for p in pagos]
+        return pagos
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
