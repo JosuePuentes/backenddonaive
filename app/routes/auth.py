@@ -158,7 +158,7 @@ async def agregar_cuadre(farmacia: str, cuadre: Cuadre):
         if isinstance(imagenes, list):
             imagenes = [x for x in imagenes if isinstance(x, str) and x.strip()]
             cuadre_dict["imagenesCuadre"] = imagenes
-        if not isinstance(imagenes, list) or not (1 <= len(imagenes) <= 3):
+        if not isinstance(imagenes, list) or not (1 <= len(imagenes) <= 4):
             raise HTTPException(status_code=400, detail="El campo 'imagenesCuadre' debe ser un array de 1 a 3 strings no vacíos.")
         # ...existing code...
         result = collection.insert_one(cuadre_dict)
@@ -197,8 +197,8 @@ async def agregar_cuadre(cuadre: Cuadre):
         if isinstance(imagenes, list):
             imagenes = [x for x in imagenes if isinstance(x, str) and x.strip()]
             cuadre_dict["imagenesCuadre"] = imagenes
-        if not isinstance(imagenes, list) or not (1 <= len(imagenes) <= 3):
-            raise HTTPException(status_code=400, detail="El campo 'imagenesCuadre' debe ser un array de 1 a 3 strings no vacíos.")
+        if not isinstance(imagenes, list) or not (1 <= len(imagenes) <= 4):
+            raise HTTPException(status_code=400, detail="El campo 'imagenesCuadre' debe ser un array de 1 a 4 strings no vacíos.")
         result = await collection.insert_one(cuadre_dict)
         return {"message": "Cuadre agregado exitosamente", "id": str(result.inserted_id)}
     except Exception as e:
@@ -293,7 +293,7 @@ async def agregar_gasto(gasto: Gasto):
             else:
                 imagenes = []
             gasto_dict["imagenesGasto"] = imagenes
-            if not (1 <= len(imagenes) <= 3):
+            if not (1 <= len(imagenes) <= 4):
                 raise HTTPException(status_code=400, detail="El campo 'imagenesGasto' debe ser un array de 1 a 3 strings no vacíos.")
         else:
             gasto_dict["imagenesGasto"] = []
