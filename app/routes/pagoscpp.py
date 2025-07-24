@@ -1,4 +1,9 @@
 from fastapi import APIRouter, HTTPException, Body, Depends, Query
+from fastapi import Request
+from datetime import datetime
+from fastapi import Query
+from fastapi.responses import JSONResponse
+from dateutil.parser import parse as parse_date
 from app.db.mongo import get_collection
 from datetime import datetime
 from pydantic import BaseModel
@@ -8,22 +13,43 @@ from bson import ObjectId
 
 router = APIRouter()
 
+class ImagenCuentaPorPagar(BaseModel):
+    url: str
+    descripcion: Optional[str] = None
+
 class PagoCPP(BaseModel):
+    _id: Optional[str] = None
     fecha: str
-    hora: Optional[str] = None
-    moneda: str
-    monto: float
     referencia: str
     usuario: str
     bancoEmisor: str
     bancoReceptor: str
-    tasa: Optional[float] = None
     imagenPago: Optional[str] = None
     farmaciaId: str
     estado: str
     cuentaPorPagarId: str
+    fechaEmision: Optional[str] = None
+    fechaRecepcion: Optional[str] = None
+    fechaVencimiento: Optional[str] = None
     fechaRegistro: Optional[str] = None
+    diasCredito: Optional[int] = None
+    numeroFactura: Optional[str] = None
+    numeroControl: Optional[str] = None
+    proveedor: Optional[str] = None
+    descripcion: Optional[str] = None
+    montoOriginal: Optional[float] = None
+    retencion: Optional[float] = None
+    monedaOriginal: Optional[str] = None
+    tasaOriginal: Optional[float] = None
+    tasaDePago: Optional[float] = None
+    estatus: Optional[str] = None
+    usuarioCorreoCuenta: Optional[str] = None
+    imagenesCuentaPorPagar: Optional[List[ImagenCuentaPorPagar]] = None
+    montoDePago: Optional[float] = None
+    monedaDePago: Optional[str] = None
+    abono: Optional[bool] = None
     horaRegistro: Optional[str] = None
+    hora: Optional[str] = None  # ya estaba en tu modelo
 
 class EstadoUpdate(BaseModel):
     estado: str
@@ -110,6 +136,34 @@ async def listar_todos_los_pagos_cpp():
     try:
         collection = get_collection("PAGOSCPP")
         pagos = await collection.find({}).to_list(length=1000)
+        pagos = [pago_to_dict(p) for p in pagos]
+        return pagos
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/pagoscpp/rango-fechas")
+async def obtener_pagos_por_rango_fechas(
+    fechaInicio: str = Query(..., description="Fecha de inicio en formato YYYY-MM-DD"),
+    fechaFin: str = Query(..., description="Fecha de fin en formato YYYY-MM-DD")
+):
+    """
+    Devuelve todos los pagos cuyo campo 'fecha' esté en el rango [fechaInicio, fechaFin] (ambos inclusive).
+    """
+    try:
+        collection = get_collection("PAGOSCPP")
+        # Validar formato de fecha
+        try:
+            fecha_inicio_dt = datetime.strptime(fechaInicio, "%Y-%m-%d")
+            fecha_fin_dt = datetime.strptime(fechaFin, "%Y-%m-%d")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Formato de fecha inválido. Use YYYY-MM-DD.")
+
+        pagos = await collection.find({
+            "fecha": {
+                "$gte": fechaInicio,
+                "$lte": fechaFin
+            }
+        }).to_list(length=1000)
         pagos = [pago_to_dict(p) for p in pagos]
         return pagos
     except Exception as e:
