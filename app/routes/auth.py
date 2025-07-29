@@ -95,14 +95,39 @@ async def login_user(data: LoginInput):
     }
 
 @router.get("/cuadres")
-async def obtener_cuadres():
-    collection = get_collection("CUADRES")
-    resultados = await collection.find({}).to_list(100)
-    # Convertir _id a string
-    print(f"resultados: {resultados}")
-    for r in resultados:
-        r["_id"] = str(r["_id"])
-    return resultados
+async def obtener_cuadres(
+    farmacia: Optional[str] = Query(None),
+    fechaInicio: Optional[str] = Query(None),
+    fechaFin: Optional[str] = Query(None)
+):
+    db = get_collection("CUADRES").database
+    cuadres = []
+    # Si no se especifica farmacia, buscar en todas las colecciones CUADRES-*
+    if not farmacia:
+        colecciones = await db.list_collection_names()
+        for nombre in colecciones:
+            if nombre.startswith("CUADRES-"):
+                collection = db[nombre]
+                filtro = {}
+                if fechaInicio and fechaFin:
+                    filtro["dia"] = {"$gte": fechaInicio, "$lte": fechaFin}
+                docs = await collection.find(filtro).to_list(length=None)
+                for r in docs:
+                    r["_id"] = str(r["_id"])
+                    r["codigoFarmacia"] = nombre.replace("CUADRES-", "")
+                cuadres.extend(docs)
+    else:
+        nombre = f"CUADRES-{farmacia}"
+        collection = db[nombre]
+        filtro = {}
+        if fechaInicio and fechaFin:
+            filtro["dia"] = {"$gte": fechaInicio, "$lte": fechaFin}
+        docs = await collection.find(filtro).to_list(length=None)
+        for r in docs:
+            r["_id"] = str(r["_id"])
+            r["codigoFarmacia"] = farmacia
+        cuadres.extend(docs)
+    return cuadres
 
 @router.get("/cuadres/all")
 async def obtener_todos_los_cuadres():
