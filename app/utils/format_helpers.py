@@ -49,7 +49,8 @@ async def crear_usuario_con_farmacias(correo: str, contraseña: str, farmacias: 
     nuevo_usuario = {
         "correo": correo,
         "contraseña": contraseña_segura,
-        "farmacias": farmacias  # Debe ser un dict, por ejemplo: {"01": "santa elena", "02": "rapifarma"}
+        "farmacias": farmacias,  # Debe ser un dict, por ejemplo: {"01": "santa elena", "02": "rapifarma"}
+        "permisos": []  # Nuevo campo: lista de permisos
     }
 
     resultado = await usuarios_collection.insert_one(nuevo_usuario)
@@ -57,7 +58,15 @@ async def crear_usuario_con_farmacias(correo: str, contraseña: str, farmacias: 
     return {
         "id": str(resultado.inserted_id),
         "correo": correo,
-        "farmacias": farmacias
+        "farmacias": farmacias,
+        "permisos": [
+            "ver_inicio",
+            "ver_about",
+            "agregar_cuadre",
+            "verificar_cuadres",
+            "ver_cuadres_dia",
+            "verificar_gastos"
+        ]
     }
 
 # Función de prueba
@@ -72,8 +81,9 @@ async def main():
     "06": "San Martin",
     "07": "Milagro Norte"
   }
-        nuevo = await crear_usuario_con_farmacias("eversstevens@gmail.com", "Aminda7*", farmacias)
+        nuevo = await crear_usuario_con_farmacias("carlaverapino25@gmail.com", "27552019", farmacias)
         print("Usuario creado:", nuevo)
+        print("Permisos:", nuevo["permisos"])
     except ValueError as e:
         print("Error:", str(e))
 
