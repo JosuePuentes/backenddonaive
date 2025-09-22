@@ -336,7 +336,8 @@ async def agregar_gasto(gasto: Gasto):
 async def obtener_gastos(
     localidad: Optional[str] = None,
     fecha_inicio: Optional[str] = None,
-    fecha_fin: Optional[str] = None
+    fecha_fin: Optional[str] = None,
+    estado: Optional[str] = None
 ):
     try:
         collection = get_collection("GASTOS")
@@ -345,6 +346,8 @@ async def obtener_gastos(
             filtro["localidad"] = localidad
         if fecha_inicio and fecha_fin:
             filtro["fecha"] = {"$gte": fecha_inicio, "$lte": fecha_fin}
+        if estado:
+            filtro["estado"] = estado
         resultados = await collection.find(filtro).to_list(1000)
         for r in resultados:
             r["_id"] = str(r["_id"])
