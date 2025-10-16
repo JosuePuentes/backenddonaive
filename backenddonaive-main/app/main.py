@@ -19,7 +19,7 @@ app.add_middleware(
 
 
 app.include_router(example_router, prefix="/api/v1")
-app.include_router(auth.router)
+app.include_router(auth.router, tags=["auth", "usuarios"])
 app.include_router(pagoscpp_router)
 app.include_router(metas.router, tags=["metas"])
 app.include_router(cuadres, prefix="/api/cuadres", tags=["cuadres"])

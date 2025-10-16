@@ -80,6 +80,24 @@ class Inventario(BaseModel):
 async def root():
     return {"message": "API funcionando"}
 
+@router.get("/health")
+async def health_check():
+    """Endpoint de verificación de salud del servidor"""
+    return {
+        "status": "ok",
+        "message": "Servidor funcionando correctamente",
+        "endpoints_usuarios": [
+            "GET /usuarios",
+            "GET /usuarios/{id}",
+            "POST /usuarios",
+            "PATCH /usuarios/{id}",
+            "DELETE /usuarios/{id}",
+            "GET /permisos",
+            "GET /usuarios/{id}/permisos",
+            "PATCH /usuarios/{id}/permisos"
+        ]
+    }
+
 @router.delete("/admin/delete-users")
 async def delete_users_except_admin(usuario: dict = Depends(get_current_user)):
     """
