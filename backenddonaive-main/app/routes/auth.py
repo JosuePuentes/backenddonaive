@@ -80,6 +80,15 @@ class Inventario(BaseModel):
 async def root():
     return {"message": "API funcionando"}
 
+@router.get("/test")
+async def test_endpoint():
+    """Endpoint de prueba simple"""
+    return {
+        "status": "ok",
+        "message": "Endpoint de prueba funcionando",
+        "timestamp": "2025-01-27T12:00:00Z"
+    }
+
 @router.get("/health")
 async def health_check():
     """Endpoint de verificación de salud del servidor"""

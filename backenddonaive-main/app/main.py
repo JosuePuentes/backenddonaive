@@ -6,7 +6,17 @@ from app.routes.pagoscpp import router as pagoscpp_router
 from app.routes.cuadres import router as cuadres
 
 
-app = FastAPI()
+app = FastAPI(title="Rapifarma Backend", version="1.0.0")
+
+# Endpoint de prueba directo
+@app.get("/test-direct")
+async def test_direct():
+    return {"message": "Endpoint directo funcionando", "status": "ok"}
+
+# Endpoint de usuarios directo para debug
+@app.get("/usuarios-debug")
+async def usuarios_debug():
+    return {"message": "Endpoint usuarios debug funcionando", "status": "ok"}
 
 # CORS
 app.add_middleware(
