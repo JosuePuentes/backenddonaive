@@ -85,7 +85,8 @@ async def health_check():
     """Endpoint de verificación de salud del servidor"""
     return {
         "status": "ok",
-        "message": "Servidor funcionando correctamente",
+        "message": "Servidor funcionando correctamente - Módulo de usuarios activo",
+        "version": "1.0.0",
         "endpoints_usuarios": [
             "GET /usuarios",
             "GET /usuarios/{id}",
@@ -95,7 +96,8 @@ async def health_check():
             "GET /permisos",
             "GET /usuarios/{id}/permisos",
             "PATCH /usuarios/{id}/permisos"
-        ]
+        ],
+        "timestamp": "2025-01-27T11:53:00Z"
     }
 
 @router.delete("/admin/delete-users")
