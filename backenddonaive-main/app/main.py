@@ -21,6 +21,10 @@ async def test_direct():
 async def test_simple():
     return {"message": "Test simple funcionando", "timestamp": "2024-01-19"}
 
+@app.get("/health-check")
+async def health_check():
+    return {"status": "healthy", "version": "1.0.0", "endpoints": ["test-direct", "test-simple", "usuarios", "farmacias/resumen"]}
+
 # ===== ENDPOINTS DE USUARIOS DIRECTOS =====
 
 @app.get("/usuarios")
