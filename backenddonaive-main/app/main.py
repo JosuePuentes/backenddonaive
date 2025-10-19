@@ -17,6 +17,10 @@ app = FastAPI(title="Rapifarma Backend", version="1.0.0")
 async def test_direct():
     return {"message": "Endpoint directo funcionando", "status": "ok"}
 
+@app.get("/test-simple")
+async def test_simple():
+    return {"message": "Test simple funcionando", "timestamp": "2024-01-19"}
+
 # ===== ENDPOINTS DE USUARIOS DIRECTOS =====
 
 @app.get("/usuarios")
