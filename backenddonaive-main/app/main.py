@@ -200,7 +200,7 @@ async def listar_permisos_disponibles():
 
 @app.get("/farmacias/resumen")
 async def resumen_farmacias_con_costos():
-    """Resumen de farmacias con costos totales de cuadres"""
+    """Resumen de farmacias con costos totales de cuadres e inventario"""
     try:
         # Obtener farmacias
         farmacias_collection = get_collection("FARMACIAS")
@@ -221,6 +221,7 @@ async def resumen_farmacias_con_costos():
         colecciones_farmacias = [nombre for nombre in colecciones if nombre.startswith("CUADRES-")]
         
         resumen_farmacias = {}
+        costoInventarioTotal = 0
         
         for nombre_coleccion in colecciones_farmacias:
             # Extraer ID de farmacia del nombre de la colección (ej: CUADRES-01 -> 01)
@@ -240,7 +241,8 @@ async def resumen_farmacias_con_costos():
                         "_id": None,
                         "totalCuadres": {"$sum": 1},
                         "costoTotal": {"$sum": {"$ifNull": ["$costo", 0]}},
-                        "ventasTotal": {"$sum": {"$ifNull": ["$totalCajaSistemaBs", 0]}}
+                        "ventasTotal": {"$sum": {"$ifNull": ["$totalCajaSistemaBs", 0]}},
+                        "costoInventario": {"$sum": {"$ifNull": ["$costoInventario", 0]}}
                     }
                 }
             ]
@@ -248,12 +250,15 @@ async def resumen_farmacias_con_costos():
             resultado = await collection.aggregate(pipeline).to_list(length=None)
             
             if resultado:
+                costoInventarioFarmacia = resultado[0]["costoInventario"]
+                costoInventarioTotal += costoInventarioFarmacia
+                
                 resumen_farmacias[farmacia_id] = {
                     "id": farmacia_id,
                     "nombre": farmacias.get(farmacia_id, f"Farmacia {farmacia_id}"),
                     "totalCuadres": resultado[0]["totalCuadres"],
                     "costoTotal": resultado[0]["costoTotal"],
-                    "ventasTotal": resultado[0]["ventasTotal"]
+                    "ventasTotal": resultado[0]["ventasTotal"] + costoInventarioFarmacia
                 }
             else:
                 resumen_farmacias[farmacia_id] = {
@@ -269,7 +274,8 @@ async def resumen_farmacias_con_costos():
             "totalGeneral": {
                 "totalCuadres": sum(f["totalCuadres"] for f in resumen_farmacias.values()),
                 "costoTotal": sum(f["costoTotal"] for f in resumen_farmacias.values()),
-                "ventasTotal": sum(f["ventasTotal"] for f in resumen_farmacias.values())
+                "ventasTotal": sum(f["ventasTotal"] for f in resumen_farmacias.values()),
+                "costoInventarioTotal": costoInventarioTotal
             }
         }
         
