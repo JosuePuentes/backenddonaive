@@ -80,6 +80,29 @@ class Inventario(BaseModel):
 async def root():
     return {"message": "API funcionando"}
 
+@router.get("/usuarios")
+async def obtener_usuarios(usuario_actual: dict = Depends(get_current_user)):
+    """
+    Endpoint para obtener todos los usuarios.
+    Requiere autenticación.
+    """
+    try:
+        collection = get_collection("USUARIOS")
+        usuarios = await collection.find({}).to_list(length=None)
+        
+        # Convertir _id a string y limpiar datos sensibles
+        usuarios_limpios = []
+        for usuario in usuarios:
+            usuario["_id"] = str(usuario["_id"])
+            # Remover la contraseña por seguridad
+            if "contraseña" in usuario:
+                del usuario["contraseña"]
+            usuarios_limpios.append(usuario)
+        
+        return usuarios_limpios
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/auth/login")
 async def login_user(data: LoginInput):
