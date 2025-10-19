@@ -198,6 +198,84 @@ async def listar_permisos_disponibles():
     }
     return permisos
 
+@app.get("/farmacias/resumen")
+async def resumen_farmacias_con_costos():
+    """Resumen de farmacias con costos totales de cuadres"""
+    try:
+        # Obtener farmacias
+        farmacias_collection = get_collection("FARMACIAS")
+        farmacias_docs = await farmacias_collection.find({}, {"_id": 0}).to_list(length=None)
+        
+        farmacias = {}
+        for doc in farmacias_docs:
+            if 'id' in doc and 'nombre' in doc:
+                farmacias[doc['id']] = doc['nombre']
+            else:
+                for k, v in doc.items():
+                    if k != '_id':
+                        farmacias[k] = v
+        
+        # Obtener costos de cuadres por farmacia
+        db = get_collection("CUADRES").database
+        colecciones = await db.list_collection_names()
+        colecciones_farmacias = [nombre for nombre in colecciones if nombre.startswith("CUADRES-")]
+        
+        resumen_farmacias = {}
+        
+        for nombre_coleccion in colecciones_farmacias:
+            # Extraer ID de farmacia del nombre de la colección (ej: CUADRES-01 -> 01)
+            farmacia_id = nombre_coleccion.split("-")[1]
+            
+            collection = db[nombre_coleccion]
+            
+            # Pipeline para sumar costos de cuadres verificados
+            pipeline = [
+                {
+                    "$match": {
+                        "estado": "verified"
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": None,
+                        "totalCuadres": {"$sum": 1},
+                        "costoTotal": {"$sum": {"$ifNull": ["$costo", 0]}},
+                        "ventasTotal": {"$sum": {"$ifNull": ["$totalCajaSistemaBs", 0]}}
+                    }
+                }
+            ]
+            
+            resultado = await collection.aggregate(pipeline).to_list(length=None)
+            
+            if resultado:
+                resumen_farmacias[farmacia_id] = {
+                    "id": farmacia_id,
+                    "nombre": farmacias.get(farmacia_id, f"Farmacia {farmacia_id}"),
+                    "totalCuadres": resultado[0]["totalCuadres"],
+                    "costoTotal": resultado[0]["costoTotal"],
+                    "ventasTotal": resultado[0]["ventasTotal"]
+                }
+            else:
+                resumen_farmacias[farmacia_id] = {
+                    "id": farmacia_id,
+                    "nombre": farmacias.get(farmacia_id, f"Farmacia {farmacia_id}"),
+                    "totalCuadres": 0,
+                    "costoTotal": 0,
+                    "ventasTotal": 0
+                }
+        
+        return {
+            "farmacias": resumen_farmacias,
+            "totalGeneral": {
+                "totalCuadres": sum(f["totalCuadres"] for f in resumen_farmacias.values()),
+                "costoTotal": sum(f["costoTotal"] for f in resumen_farmacias.values()),
+                "ventasTotal": sum(f["ventasTotal"] for f in resumen_farmacias.values())
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener resumen de farmacias: {str(e)}")
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
