@@ -6,7 +6,7 @@ app = FastAPI(title="Rapifarma Backend", version="1.0.0")
 # Endpoints básicos que siempre funcionan
 @app.get("/")
 async def root():
-    return {"message": "API funcionando"}
+    return {"message": "API funcionando - Deploy actualizado", "version": "1.0.0", "commit": "0eaab7f"}
 
 @app.get("/ping")
 async def ping():
