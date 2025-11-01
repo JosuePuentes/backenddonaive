@@ -117,6 +117,40 @@ async def login_user(data: LoginInput):
         "usuario": usuario
     }
 
+@router.post("/admin/reset-password")
+async def reset_admin_password(data: dict = Body(...)):
+    """
+    Endpoint para cambiar la contraseña del admin.
+    Este endpoint es temporal para reseteo de contraseñas.
+    """
+    try:
+        from app.core.auth import hashear_contraseña
+        
+        password = data.get("password")
+        if not password:
+            raise HTTPException(status_code=400, detail="La contraseña es requerida")
+        
+        usuarios_collection = get_collection("USUARIOS")
+        
+        # Buscar y actualizar el usuario admin
+        hashed_password = hashear_contraseña(password)
+        result = await usuarios_collection.update_one(
+            {"correo": "admin@gmail.com"},
+            {"$set": {"contraseña": hashed_password}}
+        )
+        
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="No se encontró el usuario admin o no se realizaron cambios")
+        
+        return {
+            "message": "Contraseña actualizada exitosamente",
+            "correo": "admin@gmail.com",
+            "nueva_contraseña": password
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al cambiar la contraseña: {str(e)}")
+
 @router.get("/cuadres")
 async def obtener_cuadres(
     farmacia: Optional[str] = Query(None),
