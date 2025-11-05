@@ -30,10 +30,10 @@ async def health_check():
 
 # Importar dependencias y agregar endpoints complejos
 try:
-from app.api.v1.routes_example import router as example_router
-from app.routes import auth, metas
-from app.routes.pagoscpp import router as pagoscpp_router
-from app.routes.cuadres import router as cuadres
+    from app.api.v1.routes_example import router as example_router
+    from app.routes import auth, metas
+    from app.routes.pagoscpp import router as pagoscpp_router
+    from app.routes.cuadres import router as cuadres
     from app.routes.punto_venta import router as punto_venta_router
     from app.core.get_current_user import get_current_user
     from app.db.mongo import get_collection
