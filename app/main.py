@@ -306,20 +306,20 @@ try:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error al obtener resumen de farmacias: {str(e)}")
 
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # o especifica tu dominio del frontend
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    # CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # o especifica tu dominio del frontend
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-app.include_router(example_router, prefix="/api/v1")
+    app.include_router(example_router, prefix="/api/v1")
     app.include_router(auth.router, tags=["auth"]) # auth.router now only contains login and admin-specific endpoints
-app.include_router(pagoscpp_router)
-app.include_router(metas.router, tags=["metas"])
-app.include_router(cuadres, prefix="/api/cuadres", tags=["cuadres"])
+    app.include_router(pagoscpp_router)
+    app.include_router(metas.router, tags=["metas"])
+    app.include_router(cuadres, prefix="/api/cuadres", tags=["cuadres"])
     app.include_router(punto_venta_router, prefix="/punto-venta", tags=["punto-venta"])
 
 except Exception as e:
