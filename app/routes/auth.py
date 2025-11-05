@@ -808,10 +808,25 @@ async def agregar_inventario(data: Inventario, usuario: dict = Depends(get_curre
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/inventarios")
-async def listar_inventarios(usuario: dict = Depends(get_current_user)):
+async def listar_inventarios(
+    usuario: dict = Depends(get_current_user),
+    incluir_eliminados: bool = Query(False, description="Incluir inventarios eliminados")
+):
+    """
+    Lista todos los inventarios.
+    Por defecto, solo muestra inventarios activos (excluye los eliminados).
+    Use incluir_eliminados=true para ver también los eliminados.
+    """
     try:
         collection = get_collection("INVENTARIOS")
-        inventarios = await collection.find({}).to_list(length=None)
+        
+        # Construir query de filtrado
+        query = {}
+        if not incluir_eliminados:
+            # Filtrar solo inventarios activos (no eliminados)
+            query["estado"] = {"$ne": "eliminado"}
+        
+        inventarios = await collection.find(query).to_list(length=None)
         for inv in inventarios:
             inv["_id"] = str(inv["_id"])
         return inventarios
@@ -952,6 +967,130 @@ async def actualizar_estado_inventario(id: str, data: dict = Body(...), usuario:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/inventarios/{id}")
+async def eliminar_inventario(id: str, usuario: dict = Depends(get_current_user)):
+    """
+    Elimina un inventario usando Soft Delete (eliminación lógica).
+    
+    En lugar de eliminar físicamente el documento:
+    - Cambia el estado a "eliminado"
+    - Registra la fecha de eliminación
+    - Registra el usuario que eliminó el inventario
+    
+    Ventajas:
+    - Permite recuperar datos eliminados por error
+    - Mantiene historial para auditoría
+    - Permite generar reportes históricos
+    - Evita problemas con referencias en otras colecciones
+    """
+    try:
+        collection = get_collection("INVENTARIOS")
+        
+        # Verificar que el inventario existe y no está ya eliminado
+        inventario = await collection.find_one({"_id": ObjectId(id)})
+        if not inventario:
+            raise HTTPException(status_code=404, detail="Inventario no encontrado")
+        
+        if inventario.get("estado") == "eliminado":
+            raise HTTPException(status_code=400, detail="El inventario ya está eliminado")
+        
+        # Soft Delete: actualizar estado y agregar campos de auditoría
+        update_data = {
+            "$set": {
+                "estado": "eliminado",
+                "fecha_eliminacion": datetime.now().isoformat(),
+                "usuario_eliminacion": usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
+            }
+        }
+        
+        result = await collection.update_one(
+            {"_id": ObjectId(id)},
+            update_data
+        )
+        
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="No se pudo eliminar el inventario")
+        
+        return {
+            "message": "Inventario eliminado exitosamente (eliminación lógica)",
+            "id": id,
+            "fecha_eliminacion": datetime.now().isoformat(),
+            "puede_recuperar": True,
+            "nota": "El inventario puede ser recuperado cambiando su estado a 'activo'"
+        }
+        
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="ID de inventario inválido")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al eliminar el inventario: {str(e)}"
+        )
+
+
+@router.post("/inventarios/{id}/restaurar")
+async def restaurar_inventario(id: str, usuario: dict = Depends(get_current_user)):
+    """
+    Restaura un inventario eliminado (cambia el estado de "eliminado" a "activo").
+    
+    Solo se puede restaurar inventarios que estén en estado "eliminado".
+    """
+    try:
+        collection = get_collection("INVENTARIOS")
+        
+        # Verificar que el inventario existe
+        inventario = await collection.find_one({"_id": ObjectId(id)})
+        if not inventario:
+            raise HTTPException(status_code=404, detail="Inventario no encontrado")
+        
+        # Verificar que el inventario está eliminado
+        if inventario.get("estado") != "eliminado":
+            raise HTTPException(
+                status_code=400, 
+                detail=f"El inventario no está eliminado. Estado actual: {inventario.get('estado', 'activo')}"
+            )
+        
+        # Restaurar: cambiar estado a "activo" y limpiar campos de eliminación
+        update_data = {
+            "$set": {
+                "estado": "activo",
+                "fecha_restauracion": datetime.now().isoformat(),
+                "usuario_restauracion": usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
+            },
+            "$unset": {
+                "fecha_eliminacion": "",
+                "usuario_eliminacion": ""
+            }
+        }
+        
+        result = await collection.update_one(
+            {"_id": ObjectId(id)},
+            update_data
+        )
+        
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="No se pudo restaurar el inventario")
+        
+        return {
+            "message": "Inventario restaurado exitosamente",
+            "id": id,
+            "fecha_restauracion": datetime.now().isoformat(),
+            "estado": "activo"
+        }
+        
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="ID de inventario inválido")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al restaurar el inventario: {str(e)}"
+        )
+
+
 @router.patch("/inventarios/{inventario_id}/items/{item_id}")
 async def modificar_item_inventario(
     inventario_id: str,
@@ -971,10 +1110,14 @@ async def modificar_item_inventario(
     try:
         collection = get_collection("INVENTARIOS")
         
-        # Verificar que el inventario existe
+        # Verificar que el inventario existe y no está eliminado
         inventario = await collection.find_one({"_id": ObjectId(inventario_id)})
         if not inventario:
             raise HTTPException(status_code=404, detail="Inventario no encontrado")
+        
+        # Verificar que el inventario no esté eliminado
+        if inventario.get("estado") == "eliminado":
+            raise HTTPException(status_code=400, detail="No se puede modificar un inventario eliminado. Debe restaurarlo primero.")
         
         # Verificar que el inventario tiene items
         items = inventario.get("items", [])
