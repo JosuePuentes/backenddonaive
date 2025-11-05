@@ -3,6 +3,25 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Rapifarma Backend", version="1.0.0")
 
+# Configurar CORS primero para que siempre esté disponible
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://www.donaive.com.ve",
+        "https://donaive.com.ve",
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:8080",
+        "http://localhost:5174",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8080",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Endpoints básicos que siempre funcionan
 @app.get("/")
 async def root():
@@ -306,15 +325,7 @@ try:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error al obtener resumen de farmacias: {str(e)}")
 
-    # CORS
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],  # o especifica tu dominio del frontend
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
+    # Registrar routers
     app.include_router(example_router, prefix="/api/v1")
     app.include_router(auth.router, tags=["auth"]) # auth.router now only contains login and admin-specific endpoints
     app.include_router(pagoscpp_router)
@@ -324,11 +335,4 @@ try:
 
 except Exception as e:
     print(f"Error importing complex dependencies: {e}")
-    # CORS básico para endpoints simples
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS ya está configurado arriba, no es necesario configurarlo de nuevo
