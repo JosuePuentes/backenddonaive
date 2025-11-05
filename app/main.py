@@ -88,6 +88,36 @@ try:
             items.append(u)
         return {"usuarios": items}
 
+    @app.patch("/modificar-usuarios/{id}")
+    async def actualizar_usuario_modificar(id: str, data: dict = Body(...), usuario: dict = Depends(get_current_user)):
+        """Actualizar usuario desde el módulo de modificar usuarios - Solo admin"""
+        if usuario.get("correo") != "admin@gmail.com":
+            raise HTTPException(status_code=403, detail="Solo el usuario admin puede actualizar usuarios")
+
+        try:
+            oid = ObjectId(id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID inválido")
+
+        usuarios_collection = get_collection("USUARIOS")
+        
+        # Preparar actualización
+        update_fields = dict(data)
+        if "contraseña" in update_fields and update_fields["contraseña"]:
+            from app.core.auth import hashear_contraseña
+            update_fields["contraseña"] = hashear_contraseña(update_fields["contraseña"])
+        
+        update_fields.pop("_id", None)
+        
+        result = await usuarios_collection.update_one({"_id": oid}, {"$set": update_fields})
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        # Devolver usuario actualizado sin contraseña
+        actualizado = await usuarios_collection.find_one({"_id": oid}, {"contraseña": 0})
+        actualizado["_id"] = str(actualizado["_id"])
+        return {"usuario": actualizado}
+
     @app.get("/usuarios/{id}")
     async def obtener_usuario(id: str, usuario: dict = Depends(get_current_user)):
         """Obtener usuario específico por ID - Solo admin"""
