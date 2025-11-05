@@ -894,21 +894,21 @@ async def upload_excel_inventarios(
             raise HTTPException(status_code=422, detail="El array 'productos' no puede estar vacío")
         
         # Convertir a modelo Pydantic para validación
+        from pydantic import ValidationError
         try:
             request_data = UploadExcelRequest(**data)
-        except Exception as e:
+        except ValidationError as e:
             # Si falla la validación de Pydantic, proporcionar mensaje más claro
-            from pydantic import ValidationError
-            if isinstance(e, ValidationError):
-                errors = []
-                for error in e.errors():
-                    field = " -> ".join(str(x) for x in error.get("loc", []))
-                    msg = error.get("msg", "Error de validación")
-                    errors.append(f"{field}: {msg}")
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Error de validación: {'; '.join(errors)}"
-                )
+            errors = []
+            for error in e.errors():
+                field = " -> ".join(str(x) for x in error.get("loc", []))
+                msg = error.get("msg", "Error de validación")
+                errors.append(f"{field}: {msg}")
+            raise HTTPException(
+                status_code=422,
+                detail=f"Error de validación: {'; '.join(errors)}"
+            )
+        except Exception as e:
             error_msg = str(e)
             raise HTTPException(status_code=422, detail=f"Error de validación: {error_msg}")
         
@@ -919,7 +919,8 @@ async def upload_excel_inventarios(
         # Si no existe PRODUCTOS, usar INVENTARIOS
         try:
             await productos_collection.find_one({})
-        except:
+        except Exception as e:
+            print(f"Error accediendo a PRODUCTOS, usando INVENTARIOS: {str(e)}")
             productos_collection = get_collection("INVENTARIOS")
         
         productos_agregados = 0
@@ -1014,10 +1015,29 @@ async def upload_excel_inventarios(
             errores=errores if errores else None
         )
         
+    except HTTPException:
+        # Re-lanzar HTTPExceptions sin modificar
+        raise
     except Exception as e:
+        # Log del error completo para debugging
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Error completo en upload_excel_inventarios: {error_trace}")
+        print(f"Tipo de error: {type(e).__name__}")
+        print(f"Mensaje de error: {str(e)}")
+        
+        # Proporcionar mensaje más descriptivo
+        error_detail = str(e)
+        if "ObjectId" in error_detail:
+            error_detail = "Error de formato en el ID de la base de datos"
+        elif "connection" in error_detail.lower() or "network" in error_detail.lower():
+            error_detail = "Error de conexión con la base de datos"
+        elif "validation" in error_detail.lower():
+            error_detail = f"Error de validación: {error_detail}"
+        
         raise HTTPException(
             status_code=500,
-            detail=f"Error al procesar el archivo Excel: {str(e)}"
+            detail=f"Error al procesar el archivo Excel: {error_detail}"
         )
 
 
