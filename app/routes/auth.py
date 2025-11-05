@@ -88,6 +88,24 @@ class ItemInventarioUpdate(BaseModel):
     utilidad_contable: Optional[float] = None  # Se calculará automáticamente si no se proporciona
 
 
+class ItemInventarioResponse(BaseModel):
+    """Modelo de respuesta para un item de inventario"""
+    codigo: Optional[str] = None
+    descripcion: Optional[str] = None
+    nombre: Optional[str] = None
+    marca: Optional[str] = None
+    costo: Optional[float] = None
+    costo_unitario: Optional[float] = None
+    precio: Optional[float] = None
+    precio_unitario: Optional[float] = None
+    cantidad: Optional[int] = None
+    utilidad_contable: Optional[float] = None
+    _id: Optional[str] = None
+    
+    class Config:
+        extra = "allow"  # Permite campos adicionales que puedan existir en los items
+
+
 class ProductoExcel(BaseModel):
     codigo: str
     nombre: str
@@ -1027,6 +1045,79 @@ async def eliminar_inventario(id: str, usuario: dict = Depends(get_current_user)
         raise HTTPException(
             status_code=500,
             detail=f"Error al eliminar el inventario: {str(e)}"
+        )
+
+
+@router.get("/inventarios/{inventario_id}/items", response_model=List[ItemInventarioResponse])
+async def obtener_items_inventario(
+    inventario_id: str,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Obtiene todos los items detallados de un inventario.
+    
+    Retorna un array con todos los items del inventario, incluyendo:
+    - codigo
+    - descripcion/nombre
+    - marca (si existe)
+    - costo/costo_unitario
+    - precio/precio_unitario
+    - cantidad
+    - utilidad_contable
+    - y otros campos que puedan existir en el item
+    """
+    try:
+        collection = get_collection("INVENTARIOS")
+        
+        # Verificar que el inventario existe
+        inventario = await collection.find_one({"_id": ObjectId(inventario_id)})
+        if not inventario:
+            raise HTTPException(status_code=404, detail="Inventario no encontrado")
+        
+        # Obtener items del inventario
+        items = inventario.get("items", [])
+        
+        if not items:
+            return []  # Retornar array vacío si no hay items
+        
+        # Transformar items para la respuesta
+        items_response = []
+        for item in items:
+            # Normalizar campos: algunos pueden tener diferentes nombres
+            item_dict = dict(item)
+            
+            # Mapear campos comunes
+            item_response = {
+                "codigo": item_dict.get("codigo"),
+                "descripcion": item_dict.get("descripcion") or item_dict.get("nombre"),
+                "nombre": item_dict.get("nombre") or item_dict.get("descripcion"),
+                "marca": item_dict.get("marca"),
+                "costo": item_dict.get("costo"),
+                "costo_unitario": item_dict.get("costo_unitario") or item_dict.get("costo"),
+                "precio": item_dict.get("precio"),
+                "precio_unitario": item_dict.get("precio_unitario") or item_dict.get("precio"),
+                "cantidad": item_dict.get("cantidad"),
+                "utilidad_contable": item_dict.get("utilidad_contable"),
+                "_id": str(item_dict.get("_id", "")) if item_dict.get("_id") else None
+            }
+            
+            # Agregar cualquier otro campo que exista en el item
+            for key, value in item_dict.items():
+                if key not in item_response and key != "_id":
+                    item_response[key] = value
+            
+            items_response.append(ItemInventarioResponse(**item_response))
+        
+        return items_response
+        
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="ID de inventario inválido")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener los items del inventario: {str(e)}"
         )
 
 
