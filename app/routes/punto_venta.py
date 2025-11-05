@@ -133,8 +133,8 @@ async def buscar_productos(
         except:
             productos_collection = get_collection("INVENTARIOS")
         
-        # Construir query de búsqueda
-        query = {
+        # Construir query de búsqueda base
+        query_base = {
             "$or": [
                 {"nombre": {"$regex": q, "$options": "i"}},
                 {"codigo": {"$regex": q, "$options": "i"}},
@@ -145,9 +145,19 @@ async def buscar_productos(
         
         # Filtrar por sucursal si se proporciona
         if sucursal:
-            query["sucursal"] = sucursal
-            # También buscar por código de farmacia si es relevante
-            query["$or"].append({"farmacia": sucursal})
+            # Buscar productos que estén en la sucursal especificada
+            filtro_sucursal = {
+                "$or": [
+                    {"sucursal": sucursal},
+                    {"sucursales": {"$in": [sucursal]}},
+                    {f"stock_sucursal.{sucursal}": {"$exists": True}}
+                ]
+            }
+            query = {
+                "$and": [query_base, filtro_sucursal]
+            }
+        else:
+            query = query_base
         
         # Buscar productos (limitado a 20 resultados para rendimiento)
         productos = await productos_collection.find(query).limit(20).to_list(length=20)

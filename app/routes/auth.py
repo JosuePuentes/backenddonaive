@@ -76,6 +76,30 @@ class Inventario(BaseModel):
     fecha: Optional[str] = None  # Ahora es opcional
     estado: str = "activo"  # Nuevo campo con valor por defecto
 
+
+class ProductoExcel(BaseModel):
+    codigo: str
+    nombre: str
+    precio: float
+    stock: int
+    costo: Optional[float] = None
+    descripcion: Optional[str] = None
+
+
+class UploadExcelRequest(BaseModel):
+    sucursal: str
+    productos: List[ProductoExcel]
+
+
+class UploadExcelResponse(BaseModel):
+    message: str
+    sucursal: str
+    total_procesados: int
+    productos_agregados: int
+    productos_actualizados: int
+    productos_con_error: int
+    errores: Optional[List[str]] = None
+
 @router.get("/")
 async def root():
     return {"message": "API funcionando"}
@@ -782,6 +806,123 @@ async def listar_inventarios(usuario: dict = Depends(get_current_user)):
         return inventarios
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/inventarios/upload-excel", response_model=UploadExcelResponse)
+async def upload_excel_inventarios(
+    data: UploadExcelRequest,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Sube productos desde Excel y los crea o actualiza según código y sucursal.
+    Asocia cada producto a la sucursal especificada.
+    """
+    try:
+        productos_collection = get_collection("PRODUCTOS")
+        
+        # Si no existe PRODUCTOS, usar INVENTARIOS
+        try:
+            await productos_collection.find_one({})
+        except:
+            productos_collection = get_collection("INVENTARIOS")
+        
+        productos_agregados = 0
+        productos_actualizados = 0
+        productos_con_error = 0
+        errores = []
+        
+        for producto_excel in data.productos:
+            try:
+                # Buscar producto por código y sucursal
+                query = {
+                    "codigo": producto_excel.codigo,
+                    "sucursal": data.sucursal
+                }
+                
+                producto_existente = await productos_collection.find_one(query)
+                
+                if producto_existente:
+                    # Actualizar producto existente
+                    # Actualizar stock por sucursal
+                    stock_sucursal = producto_existente.get("stock_sucursal", {})
+                    if not isinstance(stock_sucursal, dict):
+                        stock_sucursal = {}
+                    
+                    # Actualizar stock de la sucursal específica
+                    stock_sucursal[data.sucursal] = producto_excel.stock
+                    
+                    # Calcular stock total (suma de todos los stocks por sucursal)
+                    stock_total = sum(stock_sucursal.values())
+                    
+                    # Asegurar que la sucursal esté en la lista de sucursales
+                    sucursales = producto_existente.get("sucursales", [])
+                    if not isinstance(sucursales, list):
+                        sucursales = []
+                    if data.sucursal not in sucursales:
+                        sucursales.append(data.sucursal)
+                    
+                    update_data = {
+                        "$set": {
+                            "nombre": producto_excel.nombre,
+                            "precio": producto_excel.precio,
+                            "costo": producto_excel.costo or producto_existente.get("costo", producto_excel.precio),
+                            "descripcion": producto_excel.descripcion,
+                            "stock": stock_total,
+                            "stock_sucursal": stock_sucursal,
+                            "sucursal": data.sucursal,  # Sucursal principal
+                            "sucursales": sucursales,
+                            "fecha_actualizacion": datetime.now().isoformat(),
+                            "usuario_actualizacion": usuario.get("correo", usuario.get("usuarioCorreo"))
+                        }
+                    }
+                    
+                    await productos_collection.update_one(query, update_data)
+                    productos_actualizados += 1
+                else:
+                    # Crear nuevo producto
+                    nuevo_producto = {
+                        "codigo": producto_excel.codigo,
+                        "nombre": producto_excel.nombre,
+                        "precio": producto_excel.precio,
+                        "costo": producto_excel.costo or producto_excel.precio,
+                        "stock": producto_excel.stock,
+                        "stock_sucursal": {
+                            data.sucursal: producto_excel.stock
+                        },
+                        "sucursal": data.sucursal,
+                        "sucursales": [data.sucursal],  # Lista de sucursales donde está disponible
+                        "descripcion": producto_excel.descripcion,
+                        "estado": "activo",
+                        "fecha_creacion": datetime.now().isoformat(),
+                        "usuario_creacion": usuario.get("correo", usuario.get("usuarioCorreo"))
+                    }
+                    
+                    await productos_collection.insert_one(nuevo_producto)
+                    productos_agregados += 1
+                    
+            except Exception as e:
+                productos_con_error += 1
+                error_msg = f"Error procesando producto {producto_excel.codigo}: {str(e)}"
+                errores.append(error_msg)
+                print(error_msg)
+        
+        total_procesados = len(data.productos)
+        
+        return UploadExcelResponse(
+            message=f"Procesados {total_procesados} productos. {productos_agregados} agregados, {productos_actualizados} actualizados.",
+            sucursal=data.sucursal,
+            total_procesados=total_procesados,
+            productos_agregados=productos_agregados,
+            productos_actualizados=productos_actualizados,
+            productos_con_error=productos_con_error,
+            errores=errores if errores else None
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al procesar el archivo Excel: {str(e)}"
+        )
+
 
 @router.patch("/inventarios/{id}/estado")
 async def actualizar_estado_inventario(id: str, data: dict = Body(...), usuario: dict = Depends(get_current_user)):
