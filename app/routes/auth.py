@@ -77,6 +77,17 @@ class Inventario(BaseModel):
     estado: str = "activo"  # Nuevo campo con valor por defecto
 
 
+class ItemInventarioUpdate(BaseModel):
+    """Modelo para actualizar un item de inventario"""
+    nombre: Optional[str] = None
+    codigo: Optional[str] = None
+    cantidad: Optional[int] = None
+    precio_unitario: Optional[float] = None
+    costo_unitario: Optional[float] = None
+    descripcion: Optional[str] = None
+    utilidad_contable: Optional[float] = None  # Se calculará automáticamente si no se proporciona
+
+
 class ProductoExcel(BaseModel):
     codigo: str
     nombre: str
@@ -939,6 +950,157 @@ async def actualizar_estado_inventario(id: str, data: dict = Body(...), usuario:
         raise HTTPException(status_code=400, detail="ID inválido")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/inventarios/{inventario_id}/items/{item_id}")
+async def modificar_item_inventario(
+    inventario_id: str,
+    item_id: str,
+    data: ItemInventarioUpdate,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Modifica un item específico de un inventario.
+    
+    - Calcula automáticamente la utilidad contable si se proporcionan precio_unitario y costo_unitario
+    - Actualiza el costo total del inventario basado en la suma de todos los items
+    - Valida que el inventario y el item existan
+    
+    Utilidad contable = (precio_unitario - costo_unitario) * cantidad
+    """
+    try:
+        collection = get_collection("INVENTARIOS")
+        
+        # Verificar que el inventario existe
+        inventario = await collection.find_one({"_id": ObjectId(inventario_id)})
+        if not inventario:
+            raise HTTPException(status_code=404, detail="Inventario no encontrado")
+        
+        # Verificar que el inventario tiene items
+        items = inventario.get("items", [])
+        if not items:
+            raise HTTPException(status_code=404, detail="El inventario no tiene items")
+        
+        # Buscar el item por ID o índice
+        item_index = None
+        item_actual = None
+        
+        # Intentar buscar por índice numérico primero
+        try:
+            idx_num = int(item_id)
+            if 0 <= idx_num < len(items):
+                item_index = idx_num
+                item_actual = items[idx_num].copy()
+        except ValueError:
+            pass
+        
+        # Si no se encontró por índice, buscar por _id
+        if item_index is None:
+            for idx, item in enumerate(items):
+                item_obj_id = item.get("_id")
+                # Comparar como string o como ObjectId
+                if item_obj_id:
+                    if str(item_obj_id) == item_id:
+                        item_index = idx
+                        item_actual = item.copy()
+                        break
+        
+        if item_index is None:
+            raise HTTPException(status_code=404, detail="Item no encontrado en el inventario")
+        
+        # Preparar los datos a actualizar
+        update_data = {}
+        
+        # Actualizar campos básicos si se proporcionan
+        if data.nombre is not None:
+            update_data["nombre"] = data.nombre
+        if data.codigo is not None:
+            update_data["codigo"] = data.codigo
+        if data.cantidad is not None:
+            if data.cantidad < 0:
+                raise HTTPException(status_code=400, detail="La cantidad no puede ser negativa")
+            update_data["cantidad"] = data.cantidad
+        if data.precio_unitario is not None:
+            if data.precio_unitario < 0:
+                raise HTTPException(status_code=400, detail="El precio unitario no puede ser negativo")
+            update_data["precio_unitario"] = data.precio_unitario
+        if data.costo_unitario is not None:
+            if data.costo_unitario < 0:
+                raise HTTPException(status_code=400, detail="El costo unitario no puede ser negativo")
+            update_data["costo_unitario"] = data.costo_unitario
+        if data.descripcion is not None:
+            update_data["descripcion"] = data.descripcion
+        
+        # Obtener valores actuales o nuevos para calcular utilidad
+        cantidad = update_data.get("cantidad", item_actual.get("cantidad", 0))
+        precio_unitario = update_data.get("precio_unitario", item_actual.get("precio_unitario", 0))
+        costo_unitario = update_data.get("costo_unitario", item_actual.get("costo_unitario", 0))
+        
+        # Calcular utilidad contable
+        # Utilidad contable = (precio_unitario - costo_unitario) * cantidad
+        if precio_unitario > 0 and costo_unitario > 0 and cantidad > 0:
+            utilidad_contable = (precio_unitario - costo_unitario) * cantidad
+            update_data["utilidad_contable"] = utilidad_contable
+        
+        # Si se proporciona utilidad_contable manualmente, usarla
+        if data.utilidad_contable is not None:
+            update_data["utilidad_contable"] = data.utilidad_contable
+        
+        # Actualizar el item en el array
+        if update_data:
+            # Construir el path del campo a actualizar
+            update_fields = {}
+            for key, value in update_data.items():
+                update_fields[f"items.{item_index}.{key}"] = value
+            
+            # Actualizar el item
+            result = await collection.update_one(
+                {"_id": ObjectId(inventario_id)},
+                {"$set": update_fields}
+            )
+            
+            if result.modified_count == 0:
+                raise HTTPException(status_code=404, detail="No se pudo actualizar el item")
+            
+            # Recalcular el costo total del inventario
+            inventario_actualizado = await collection.find_one({"_id": ObjectId(inventario_id)})
+            items_actualizados = inventario_actualizado.get("items", [])
+            
+            # Calcular costo total: suma de (costo_unitario * cantidad) de todos los items
+            costo_total = 0.0
+            for item in items_actualizados:
+                costo_unit = item.get("costo_unitario", 0)
+                cantidad_item = item.get("cantidad", 0)
+                costo_total += costo_unit * cantidad_item
+            
+            # Actualizar el costo total del inventario
+            await collection.update_one(
+                {"_id": ObjectId(inventario_id)},
+                {"$set": {"costo": costo_total}}
+            )
+            
+            # Obtener el item actualizado para retornarlo
+            inventario_final = await collection.find_one({"_id": ObjectId(inventario_id)})
+            item_actualizado = inventario_final.get("items", [])[item_index]
+            item_actualizado["_id"] = str(item_actualizado.get("_id", item_id))
+            
+            return {
+                "message": "Item actualizado exitosamente",
+                "item": item_actualizado,
+                "costo_total_inventario": costo_total
+            }
+        else:
+            raise HTTPException(status_code=400, detail="No se proporcionaron campos para actualizar")
+            
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="ID de inventario o item inválido")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al modificar el item: {str(e)}"
+        )
 
 @router.post("/presigned-url")
 async def get_presigned_url(request: Request):
