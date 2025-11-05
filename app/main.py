@@ -74,6 +74,19 @@ try:
             u["_id"] = str(u["_id"])
             items.append(u)
         return {"usuarios": items}
+    
+    @app.get("/modificar-usuarios")
+    async def modificar_usuarios(usuario: dict = Depends(get_current_user)):
+        """Endpoint para el módulo de modificar usuarios - Retorna todos los usuarios"""
+        if usuario.get("correo") != "admin@gmail.com":
+            raise HTTPException(status_code=403, detail="Solo el usuario admin puede acceder a este módulo")
+
+        usuarios_collection = get_collection("USUARIOS")
+        items = []
+        async for u in usuarios_collection.find({}, {"contraseña": 0}):
+            u["_id"] = str(u["_id"])
+            items.append(u)
+        return {"usuarios": items}
 
     @app.get("/usuarios/{id}")
     async def obtener_usuario(id: str, usuario: dict = Depends(get_current_user)):
