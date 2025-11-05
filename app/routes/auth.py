@@ -853,14 +853,67 @@ async def listar_inventarios(
 
 @router.post("/inventarios/upload-excel", response_model=UploadExcelResponse)
 async def upload_excel_inventarios(
-    data: UploadExcelRequest,
+    data: dict = Body(...),
     usuario: dict = Depends(get_current_user)
 ):
     """
     Sube productos desde Excel y los crea o actualiza según código y sucursal.
     Asocia cada producto a la sucursal especificada.
+    
+    Formato esperado:
+    {
+      "sucursal": "01",
+      "productos": [
+        {
+          "codigo": "PROD001",
+          "nombre": "Producto ejemplo",
+          "precio": 100.0,
+          "stock": 50,
+          "costo": 80.0,
+          "descripcion": "Descripción opcional"
+        }
+      ]
+    }
     """
     try:
+        # Validar estructura básica
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=422, detail="Los datos deben ser un objeto JSON")
+        
+        # Validar campos requeridos
+        if "sucursal" not in data or not data.get("sucursal"):
+            raise HTTPException(status_code=422, detail="El campo 'sucursal' es requerido")
+        
+        if "productos" not in data or not isinstance(data.get("productos"), list):
+            raise HTTPException(
+                status_code=422, 
+                detail="El campo 'productos' es requerido y debe ser un array"
+            )
+        
+        if len(data.get("productos", [])) == 0:
+            raise HTTPException(status_code=422, detail="El array 'productos' no puede estar vacío")
+        
+        # Convertir a modelo Pydantic para validación
+        try:
+            request_data = UploadExcelRequest(**data)
+        except Exception as e:
+            # Si falla la validación de Pydantic, proporcionar mensaje más claro
+            from pydantic import ValidationError
+            if isinstance(e, ValidationError):
+                errors = []
+                for error in e.errors():
+                    field = " -> ".join(str(x) for x in error.get("loc", []))
+                    msg = error.get("msg", "Error de validación")
+                    errors.append(f"{field}: {msg}")
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Error de validación: {'; '.join(errors)}"
+                )
+            error_msg = str(e)
+            raise HTTPException(status_code=422, detail=f"Error de validación: {error_msg}")
+        
+        # Usar el modelo validado
+        data = request_data
         productos_collection = get_collection("PRODUCTOS")
         
         # Si no existe PRODUCTOS, usar INVENTARIOS
