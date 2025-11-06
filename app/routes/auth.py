@@ -1465,15 +1465,35 @@ async def modificar_item_inventario(
         if item_index is None:
             for idx, item in enumerate(items):
                 item_obj_id = item.get("_id")
-                # Comparar como string
                 if item_obj_id:
+                    # Convertir a string para comparación
                     item_id_str = str(item_obj_id)
-                    # Comparar directamente o con los últimos caracteres (por si hay diferencias de formato)
-                    if item_id_str == item_id or item_id_str.endswith(item_id) or item_id.endswith(item_id_str):
+                    # Normalizar ambos IDs eliminando espacios y comparar
+                    item_id_normalizado = str(item_id).strip()
+                    item_id_str_normalizado = item_id_str.strip()
+                    
+                    # Comparaciones múltiples para asegurar que encuentre el item
+                    if (item_id_str_normalizado == item_id_normalizado or 
+                        item_id_str_normalizado.endswith(item_id_normalizado) or 
+                        item_id_normalizado.endswith(item_id_str_normalizado) or
+                        item_id_str_normalizado == item_id_normalizado.replace("-", "").replace("_", "") or
+                        item_id_normalizado == item_id_str_normalizado.replace("-", "").replace("_", "")):
                         item_index = idx
                         item_actual = item.copy()
-                        print(f"[MODIFICAR-ITEM] Item encontrado por _id en índice {idx}: {item_id_str}")
+                        print(f"[MODIFICAR-ITEM] Item encontrado por _id en índice {idx}: {item_id_str} (buscado: {item_id})")
                         break
+                    
+                    # También intentar comparar como ObjectId si es posible
+                    try:
+                        item_obj_id_obj = ObjectId(item_obj_id) if not isinstance(item_obj_id, ObjectId) else item_obj_id
+                        item_id_obj = ObjectId(item_id)
+                        if item_obj_id_obj == item_id_obj:
+                            item_index = idx
+                            item_actual = item.copy()
+                            print(f"[MODIFICAR-ITEM] Item encontrado por _id (ObjectId) en índice {idx}: {item_obj_id}")
+                            break
+                    except (InvalidId, ValueError, TypeError):
+                        pass
         
         # Si aún no se encontró, buscar por código como último recurso
         if item_index is None:
@@ -1486,9 +1506,22 @@ async def modificar_item_inventario(
                     break
         
         if item_index is None:
-            print(f"[MODIFICAR-ITEM] ERROR: Item no encontrado. item_id recibido: {item_id}")
-            print(f"[MODIFICAR-ITEM] Items disponibles: {[(i, item.get('_id'), item.get('codigo')) for i, item in enumerate(items[:5])]}")
-            raise HTTPException(status_code=404, detail=f"Item no encontrado en el inventario. item_id: {item_id}")
+            print(f"[MODIFICAR-ITEM] ERROR: Item no encontrado. item_id recibido: {item_id}, tipo: {type(item_id)}")
+            print(f"[MODIFICAR-ITEM] Total items en inventario: {len(items)}")
+            print(f"[MODIFICAR-ITEM] Primeros 5 items con _id y codigo:")
+            for i, item in enumerate(items[:5]):
+                item_id_val = item.get('_id')
+                item_codigo = item.get('codigo')
+                print(f"  [{i}] _id: {item_id_val} (tipo: {type(item_id_val)}), codigo: {item_codigo}")
+                if item_id_val:
+                    print(f"      _id como string: {str(item_id_val)}")
+                    try:
+                        if not isinstance(item_id_val, ObjectId):
+                            test_oid = ObjectId(str(item_id_val))
+                            print(f"      _id convertido a ObjectId: {test_oid}")
+                    except:
+                        pass
+            raise HTTPException(status_code=404, detail=f"Item no encontrado en el inventario. item_id: {item_id}. Total items: {len(items)}")
         
         # Preparar los datos a actualizar
         update_data = {}
