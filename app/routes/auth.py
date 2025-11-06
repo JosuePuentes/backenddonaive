@@ -1816,15 +1816,21 @@ async def modificar_item_inventario(
             print(f"[MODIFICAR-ITEM]   - modified_count: {result.modified_count}")
             print(f"[MODIFICAR-ITEM]   - upserted_id: {result.upserted_id}")
             
-            if result.modified_count == 0:
-                print(f"[MODIFICAR-ITEM] ERROR: No se pudo actualizar el item (modified_count = 0)")
+            # Verificar si se encontró el documento
+            if result.matched_count == 0:
+                print(f"[MODIFICAR-ITEM] ERROR: No se encontró el documento para actualizar")
                 print(f"[MODIFICAR-ITEM] Posibles causas:")
-                print(f"[MODIFICAR-ITEM]   - El item ya tiene esos valores")
                 print(f"[MODIFICAR-ITEM]   - El item_index ({item_index}) es incorrecto")
                 print(f"[MODIFICAR-ITEM]   - El inventario_id ({inventario_id}) es incorrecto")
                 raise HTTPException(status_code=404, detail="No se pudo actualizar el item")
             
-            print(f"[MODIFICAR-ITEM] Item actualizado exitosamente en MongoDB")
+            # Si modified_count = 0 pero matched_count = 1, significa que los valores ya son los mismos
+            # Esto es válido y no debe considerarse un error
+            if result.modified_count == 0:
+                print(f"[MODIFICAR-ITEM] INFO: modified_count = 0 (los valores ya son los mismos, no se modificó nada)")
+                print(f"[MODIFICAR-ITEM] Esto es válido - el item ya tenía esos valores")
+            else:
+                print(f"[MODIFICAR-ITEM] Item actualizado exitosamente en MongoDB (modified_count = {result.modified_count})")
             
             print(f"[MODIFICAR-ITEM] Paso 8: Recalculando costo total del inventario")
             # Recalcular el costo total del inventario
