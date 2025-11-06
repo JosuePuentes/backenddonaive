@@ -822,8 +822,26 @@ async def agregar_inventario(data: Inventario, usuario: dict = Depends(get_curre
         inventario_dict["usuarioCorreo"] = usuario.get("usuarioCorreo", data.usuarioCorreo)
         inventario_dict["fecha"] = datetime.now().strftime("%Y-%m-%d")
         inventario_dict["estado"] = "activo"  # Siempre activo al crear
+        
+        # Insertar inventario primero
         result = await collection.insert_one(inventario_dict)
-        return {"message": "Inventario registrado exitosamente", "id": str(result.inserted_id)}
+        inventario_id = str(result.inserted_id)
+        
+        # ✅ CRÍTICO: Agregar inventario_id a todos los items del inventario
+        items = inventario_dict.get("items", [])
+        if items:
+            # Optimización: hacer un solo update con todos los campos
+            update_fields = {}
+            for idx in range(len(items)):
+                update_fields[f"items.{idx}.inventario_id"] = inventario_id
+            
+            await collection.update_one(
+                {"_id": ObjectId(inventario_id)},
+                {"$set": update_fields}
+            )
+            print(f"[AGREGAR-INVENTARIO] inventario_id agregado a {len(items)} items")
+        
+        return {"message": "Inventario registrado exitosamente", "id": inventario_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1153,6 +1171,19 @@ async def upload_excel_inventarios(
             resultado_inventario = await inventarios_collection.insert_one(inventario_doc)
             inventario_id = str(resultado_inventario.inserted_id)
             print(f"[UPLOAD-EXCEL] Inventario creado con ID: {inventario_id}")
+            
+            # ✅ CRÍTICO: Agregar inventario_id a todos los items del inventario
+            # Optimización: hacer un solo update con todos los campos
+            if items_inventario:
+                update_fields = {}
+                for idx in range(len(items_inventario)):
+                    update_fields[f"items.{idx}.inventario_id"] = inventario_id
+                
+                await inventarios_collection.update_one(
+                    {"_id": ObjectId(inventario_id)},
+                    {"$set": update_fields}
+                )
+                print(f"[UPLOAD-EXCEL] inventario_id agregado a {len(items_inventario)} items")
             
         except Exception as e:
             # Si falla la creación del inventario, registrar el error pero no fallar todo el proceso
