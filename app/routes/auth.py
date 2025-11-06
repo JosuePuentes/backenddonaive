@@ -1318,8 +1318,12 @@ async def obtener_items_inventario(
             item_dict = dict(item)
             
             # Mapear campos comunes
+            # Usar código como identificador principal si no hay item_id o _id
+            item_codigo = item_dict.get("codigo")
+            item_id_val = item_dict.get("item_id") or item_dict.get("_id")
+            
             item_response = {
-                "codigo": item_dict.get("codigo"),
+                "codigo": item_codigo,
                 "descripcion": item_dict.get("descripcion") or item_dict.get("nombre"),
                 "nombre": item_dict.get("nombre") or item_dict.get("descripcion"),
                 "marca": item_dict.get("marca"),
@@ -1329,8 +1333,8 @@ async def obtener_items_inventario(
                 "precio_unitario": item_dict.get("precio_unitario") or item_dict.get("precio"),
                 "cantidad": item_dict.get("cantidad"),
                 "utilidad_contable": item_dict.get("utilidad_contable"),
-                "_id": str(item_dict.get("_id", "")) if item_dict.get("_id") else None,
-                "item_id": str(item_dict.get("item_id", "")) if item_dict.get("item_id") else None
+                "_id": str(item_id_val) if item_id_val else (str(item_codigo) if item_codigo else None),
+                "item_id": str(item_id_val) if item_id_val else (str(item_codigo) if item_codigo else None)
             }
             
             # Agregar cualquier otro campo que exista en el item
@@ -1456,11 +1460,27 @@ async def modificar_item_inventario(
         # PRIORIDAD 1: Buscar por código (es el identificador más confiable en items de inventario)
         for idx, item in enumerate(items):
             item_codigo = item.get("codigo")
-            if item_codigo and str(item_codigo).strip() == str(item_id).strip():
-                item_index = idx
-                item_actual = item.copy()
-                print(f"[MODIFICAR-ITEM] Item encontrado por código en índice {idx}: {item_codigo}")
-                break
+            if item_codigo:
+                # Normalizar ambos valores para comparación (convertir a string y eliminar espacios)
+                codigo_normalizado = str(item_codigo).strip()
+                item_id_normalizado = str(item_id).strip()
+                
+                # Comparar como strings
+                if codigo_normalizado == item_id_normalizado:
+                    item_index = idx
+                    item_actual = item.copy()
+                    print(f"[MODIFICAR-ITEM] Item encontrado por código en índice {idx}: {item_codigo} (buscado: {item_id})")
+                    break
+                
+                # También intentar comparar como números si ambos son numéricos
+                try:
+                    if float(codigo_normalizado) == float(item_id_normalizado):
+                        item_index = idx
+                        item_actual = item.copy()
+                        print(f"[MODIFICAR-ITEM] Item encontrado por código (numérico) en índice {idx}: {item_codigo} (buscado: {item_id})")
+                        break
+                except (ValueError, TypeError):
+                    pass
         
         # PRIORIDAD 2: Buscar por índice numérico
         if item_index is None:
