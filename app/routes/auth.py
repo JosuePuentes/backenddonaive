@@ -1517,13 +1517,29 @@ async def modificar_item_inventario(
                         
                         # Buscar el item en el inventario por ese código
                         if codigo_producto:
+                            codigo_producto_str = str(codigo_producto).strip()
+                            print(f"[MODIFICAR-ITEM] Buscando item con código: '{codigo_producto_str}' en {len(items)} items")
                             for idx, item in enumerate(items):
                                 item_codigo = item.get("codigo")
-                                if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
-                                    item_index = idx
-                                    item_actual = item.copy()
-                                    print(f"[MODIFICAR-ITEM] Item encontrado por código del producto en índice {idx}: {item_codigo}")
-                                    break
+                                if item_codigo:
+                                    item_codigo_str = str(item_codigo).strip()
+                                    print(f"[MODIFICAR-ITEM] Comparando: item_codigo='{item_codigo_str}' vs codigo_producto='{codigo_producto_str}'")
+                                    if item_codigo_str == codigo_producto_str:
+                                        item_index = idx
+                                        item_actual = item.copy()
+                                        print(f"[MODIFICAR-ITEM] Item encontrado por código del producto en índice {idx}: {item_codigo}")
+                                        break
+                                    # También intentar comparar como números
+                                    try:
+                                        if float(item_codigo_str) == float(codigo_producto_str):
+                                            item_index = idx
+                                            item_actual = item.copy()
+                                            print(f"[MODIFICAR-ITEM] Item encontrado por código del producto (numérico) en índice {idx}: {item_codigo}")
+                                            break
+                                    except (ValueError, TypeError):
+                                        pass
+                    else:
+                        print(f"[MODIFICAR-ITEM] No se encontró producto con ObjectId {item_id}")
                 except (InvalidId, ValueError, TypeError) as e:
                     print(f"[MODIFICAR-ITEM] No se pudo buscar producto por ObjectId: {str(e)}")
                 except Exception as e:
@@ -1531,12 +1547,13 @@ async def modificar_item_inventario(
         
         # PRIORIDAD 2: Buscar por código (dentro del inventario especificado)
         if item_index is None:
+            item_id_normalizado = str(item_id).strip()
+            print(f"[MODIFICAR-ITEM] Buscando por código: '{item_id_normalizado}' en {len(items)} items")
             for idx, item in enumerate(items):
                 item_codigo = item.get("codigo")
                 if item_codigo:
                     # Normalizar ambos valores para comparación (convertir a string y eliminar espacios)
                     codigo_normalizado = str(item_codigo).strip()
-                    item_id_normalizado = str(item_id).strip()
                     
                     # Comparar como strings
                     if codigo_normalizado == item_id_normalizado:
