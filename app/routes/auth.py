@@ -995,9 +995,10 @@ async def upload_excel_inventarios(
                 costo_item = costo_unitario * cantidad
                 costo_total_inventario += costo_item
                 
-                # Agregar item al inventario con _id para facilitar la búsqueda posterior
+                # Agregar item al inventario con item_id para facilitar la búsqueda posterior
+                # Usamos item_id en lugar de _id porque MongoDB no preserva _id dentro de arrays anidados
                 item_inventario = {
-                    "_id": str(ObjectId()),  # Generar ID único para cada item
+                    "item_id": str(ObjectId()),  # Generar ID único para cada item
                     "codigo": producto_excel.codigo,
                     "nombre": producto_excel.nombre,
                     "descripcion": producto_excel.descripcion,
@@ -1328,7 +1329,8 @@ async def obtener_items_inventario(
                 "precio_unitario": item_dict.get("precio_unitario") or item_dict.get("precio"),
                 "cantidad": item_dict.get("cantidad"),
                 "utilidad_contable": item_dict.get("utilidad_contable"),
-                "_id": str(item_dict.get("_id", "")) if item_dict.get("_id") else None
+                "_id": str(item_dict.get("_id", "")) if item_dict.get("_id") else None,
+                "item_id": str(item_dict.get("item_id", "")) if item_dict.get("item_id") else None
             }
             
             # Agregar cualquier otro campo que exista en el item
@@ -1445,26 +1447,37 @@ async def modificar_item_inventario(
         if not items:
             raise HTTPException(status_code=404, detail="El inventario no tiene items")
         
-        # Buscar el item por ID o índice
+        # Buscar el item por código, item_id, _id o índice
         item_index = None
         item_actual = None
         
         print(f"[MODIFICAR-ITEM] Buscando item_id: {item_id}, total items: {len(items)}")
         
-        # Intentar buscar por índice numérico primero
-        try:
-            idx_num = int(item_id)
-            if 0 <= idx_num < len(items):
-                item_index = idx_num
-                item_actual = items[idx_num].copy()
-                print(f"[MODIFICAR-ITEM] Item encontrado por índice: {idx_num}")
-        except ValueError:
-            pass
+        # PRIORIDAD 1: Buscar por código (es el identificador más confiable en items de inventario)
+        for idx, item in enumerate(items):
+            item_codigo = item.get("codigo")
+            if item_codigo and str(item_codigo).strip() == str(item_id).strip():
+                item_index = idx
+                item_actual = item.copy()
+                print(f"[MODIFICAR-ITEM] Item encontrado por código en índice {idx}: {item_codigo}")
+                break
         
-        # Si no se encontró por índice, buscar por _id (como string o ObjectId)
+        # PRIORIDAD 2: Buscar por índice numérico
+        if item_index is None:
+            try:
+                idx_num = int(item_id)
+                if 0 <= idx_num < len(items):
+                    item_index = idx_num
+                    item_actual = items[idx_num].copy()
+                    print(f"[MODIFICAR-ITEM] Item encontrado por índice: {idx_num}")
+            except ValueError:
+                pass
+        
+        # PRIORIDAD 3: Buscar por item_id o _id (si existen)
         if item_index is None:
             for idx, item in enumerate(items):
-                item_obj_id = item.get("_id")
+                # Buscar primero por item_id (campo que usamos para items nuevos)
+                item_obj_id = item.get("item_id") or item.get("_id")
                 if item_obj_id:
                     # Convertir a string para comparación
                     item_id_str = str(item_obj_id)
@@ -1480,7 +1493,8 @@ async def modificar_item_inventario(
                         item_id_normalizado == item_id_str_normalizado.replace("-", "").replace("_", "")):
                         item_index = idx
                         item_actual = item.copy()
-                        print(f"[MODIFICAR-ITEM] Item encontrado por _id en índice {idx}: {item_id_str} (buscado: {item_id})")
+                        campo_usado = "item_id" if item.get("item_id") else "_id"
+                        print(f"[MODIFICAR-ITEM] Item encontrado por {campo_usado} en índice {idx}: {item_id_str} (buscado: {item_id})")
                         break
                     
                     # También intentar comparar como ObjectId si es posible
@@ -1490,35 +1504,27 @@ async def modificar_item_inventario(
                         if item_obj_id_obj == item_id_obj:
                             item_index = idx
                             item_actual = item.copy()
-                            print(f"[MODIFICAR-ITEM] Item encontrado por _id (ObjectId) en índice {idx}: {item_obj_id}")
+                            campo_usado = "item_id" if item.get("item_id") else "_id"
+                            print(f"[MODIFICAR-ITEM] Item encontrado por {campo_usado} (ObjectId) en índice {idx}: {item_obj_id}")
                             break
                     except (InvalidId, ValueError, TypeError):
                         pass
         
-        # Si aún no se encontró, buscar por código como último recurso
-        if item_index is None:
-            for idx, item in enumerate(items):
-                item_codigo = item.get("codigo")
-                if item_codigo and str(item_codigo) == item_id:
-                    item_index = idx
-                    item_actual = item.copy()
-                    print(f"[MODIFICAR-ITEM] Item encontrado por código en índice {idx}: {item_codigo}")
-                    break
-        
         if item_index is None:
             print(f"[MODIFICAR-ITEM] ERROR: Item no encontrado. item_id recibido: {item_id}, tipo: {type(item_id)}")
             print(f"[MODIFICAR-ITEM] Total items en inventario: {len(items)}")
-            print(f"[MODIFICAR-ITEM] Primeros 5 items con _id y codigo:")
+            print(f"[MODIFICAR-ITEM] Primeros 5 items con item_id/_id y codigo:")
             for i, item in enumerate(items[:5]):
-                item_id_val = item.get('_id')
+                item_id_val = item.get('item_id') or item.get('_id')
                 item_codigo = item.get('codigo')
-                print(f"  [{i}] _id: {item_id_val} (tipo: {type(item_id_val)}), codigo: {item_codigo}")
+                campo_id = 'item_id' if item.get('item_id') else '_id'
+                print(f"  [{i}] {campo_id}: {item_id_val} (tipo: {type(item_id_val)}), codigo: {item_codigo}")
                 if item_id_val:
-                    print(f"      _id como string: {str(item_id_val)}")
+                    print(f"      {campo_id} como string: {str(item_id_val)}")
                     try:
                         if not isinstance(item_id_val, ObjectId):
                             test_oid = ObjectId(str(item_id_val))
-                            print(f"      _id convertido a ObjectId: {test_oid}")
+                            print(f"      {campo_id} convertido a ObjectId: {test_oid}")
                     except:
                         pass
             raise HTTPException(status_code=404, detail=f"Item no encontrado en el inventario. item_id: {item_id}. Total items: {len(items)}")
@@ -1608,7 +1614,13 @@ async def modificar_item_inventario(
             # Obtener el item actualizado para retornarlo
             inventario_final = await collection.find_one({"_id": ObjectId(inventario_id)})
             item_actualizado = inventario_final.get("items", [])[item_index]
-            item_actualizado["_id"] = str(item_actualizado.get("_id", item_id))
+            # Asegurar que el item tenga item_id o _id para la respuesta
+            if not item_actualizado.get("item_id") and not item_actualizado.get("_id"):
+                item_actualizado["item_id"] = item_id
+            elif item_actualizado.get("item_id"):
+                item_actualizado["item_id"] = str(item_actualizado["item_id"])
+            elif item_actualizado.get("_id"):
+                item_actualizado["_id"] = str(item_actualizado["_id"])
             
             return {
                 "message": "Item actualizado exitosamente",
