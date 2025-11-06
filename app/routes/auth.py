@@ -16,6 +16,7 @@ from botocore.config import Config
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+from pymongo import UpdateOne, InsertOne
 
 load_dotenv()
 
@@ -127,6 +128,7 @@ class UploadExcelResponse(BaseModel):
     productos_agregados: int
     productos_actualizados: int
     productos_con_error: int
+    inventario_id: Optional[str] = None
     errores: Optional[List[str]] = None
 
 @router.get("/")
@@ -963,16 +965,27 @@ async def upload_excel_inventarios(
         items_inventario = []
         costo_total_inventario = 0.0
         
+        # OPTIMIZACIÓN: Obtener todos los productos existentes en una sola query
+        codigos_productos = [p.codigo for p in data.productos]
+        productos_existentes_query = {
+            "codigo": {"$in": codigos_productos},
+            "sucursal": data.sucursal
+        }
+        productos_existentes_cursor = productos_collection.find(productos_existentes_query)
+        productos_existentes_dict = {}
+        async for prod in productos_existentes_cursor:
+            productos_existentes_dict[prod["codigo"]] = prod
+        
+        print(f"[UPLOAD-EXCEL] Productos existentes encontrados: {len(productos_existentes_dict)}")
+        
+        # Preparar operaciones bulk
+        bulk_operations = []
+        
+        usuario_correo = usuario.get("correo", usuario.get("usuarioCorreo"))
+        fecha_actual = datetime.now().isoformat()
+        
         for producto_excel in data.productos:
             try:
-                # Buscar producto por código y sucursal
-                query = {
-                    "codigo": producto_excel.codigo,
-                    "sucursal": data.sucursal
-                }
-                
-                producto_existente = await productos_collection.find_one(query)
-                
                 # Calcular costo unitario y precio unitario
                 costo_unitario = producto_excel.costo or producto_excel.precio
                 precio_unitario = producto_excel.precio
@@ -990,32 +1003,30 @@ async def upload_excel_inventarios(
                     "cantidad": cantidad,
                     "costo_unitario": costo_unitario,
                     "precio_unitario": precio_unitario,
-                    "costo": costo_item,  # Costo total del item
-                    "precio": precio_unitario * cantidad,  # Precio total del item
+                    "costo": costo_item,
+                    "precio": precio_unitario * cantidad,
                     "utilidad_contable": (precio_unitario - costo_unitario) * cantidad if precio_unitario > 0 and costo_unitario > 0 else 0
                 }
                 items_inventario.append(item_inventario)
                 
+                producto_existente = productos_existentes_dict.get(producto_excel.codigo)
+                
                 if producto_existente:
                     # Actualizar producto existente
-                    # Actualizar stock por sucursal
                     stock_sucursal = producto_existente.get("stock_sucursal", {})
                     if not isinstance(stock_sucursal, dict):
                         stock_sucursal = {}
                     
-                    # Actualizar stock de la sucursal específica
                     stock_sucursal[data.sucursal] = producto_excel.stock
+                    stock_total = sum(stock_sucursal.values()) if stock_sucursal else producto_excel.stock
                     
-                    # Calcular stock total (suma de todos los stocks por sucursal)
-                    stock_total = sum(stock_sucursal.values())
-                    
-                    # Asegurar que la sucursal esté en la lista de sucursales
                     sucursales = producto_existente.get("sucursales", [])
                     if not isinstance(sucursales, list):
                         sucursales = []
                     if data.sucursal not in sucursales:
                         sucursales.append(data.sucursal)
                     
+                    # Preparar operación de actualización para bulk
                     update_data = {
                         "$set": {
                             "nombre": producto_excel.nombre,
@@ -1024,14 +1035,19 @@ async def upload_excel_inventarios(
                             "descripcion": producto_excel.descripcion,
                             "stock": stock_total,
                             "stock_sucursal": stock_sucursal,
-                            "sucursal": data.sucursal,  # Sucursal principal
+                            "sucursal": data.sucursal,
                             "sucursales": sucursales,
-                            "fecha_actualizacion": datetime.now().isoformat(),
-                            "usuario_actualizacion": usuario.get("correo", usuario.get("usuarioCorreo"))
+                            "fecha_actualizacion": fecha_actual,
+                            "usuario_actualizacion": usuario_correo
                         }
                     }
                     
-                    await productos_collection.update_one(query, update_data)
+                    bulk_operations.append(
+                        UpdateOne(
+                            {"codigo": producto_excel.codigo, "sucursal": data.sucursal},
+                            update_data
+                        )
+                    )
                     productos_actualizados += 1
                 else:
                     # Crear nuevo producto
@@ -1045,14 +1061,14 @@ async def upload_excel_inventarios(
                             data.sucursal: producto_excel.stock
                         },
                         "sucursal": data.sucursal,
-                        "sucursales": [data.sucursal],  # Lista de sucursales donde está disponible
+                        "sucursales": [data.sucursal],
                         "descripcion": producto_excel.descripcion,
                         "estado": "activo",
-                        "fecha_creacion": datetime.now().isoformat(),
-                        "usuario_creacion": usuario.get("correo", usuario.get("usuarioCorreo"))
+                        "fecha_creacion": fecha_actual,
+                        "usuario_creacion": usuario_correo
                     }
                     
-                    await productos_collection.insert_one(nuevo_producto)
+                    bulk_operations.append(InsertOne(nuevo_producto))
                     productos_agregados += 1
                     
             except Exception as e:
@@ -1061,29 +1077,63 @@ async def upload_excel_inventarios(
                 errores.append(error_msg)
                 print(error_msg)
         
+        # OPTIMIZACIÓN: Ejecutar todas las operaciones en batch
+        if bulk_operations:
+            print(f"[UPLOAD-EXCEL] Ejecutando {len(bulk_operations)} operaciones en batch...")
+            try:
+                resultado_bulk = await productos_collection.bulk_write(bulk_operations, ordered=False)
+                print(f"[UPLOAD-EXCEL] Bulk write completado: {resultado_bulk.modified_count} actualizados, {resultado_bulk.inserted_count} insertados")
+                # Ajustar contadores según el resultado real
+                productos_actualizados = resultado_bulk.modified_count
+                productos_agregados = resultado_bulk.inserted_count
+            except Exception as e:
+                print(f"[UPLOAD-EXCEL] Error en bulk write: {str(e)}")
+                # Si falla el bulk, intentar operaciones individuales como fallback
+                productos_actualizados = 0
+                productos_agregados = 0
+                for op in bulk_operations:
+                    try:
+                        if isinstance(op, UpdateOne):
+                            await productos_collection.update_one(op._filter, op._doc)
+                            productos_actualizados += 1
+                        elif isinstance(op, InsertOne):
+                            await productos_collection.insert_one(op._doc)
+                            productos_agregados += 1
+                    except Exception as e2:
+                        productos_con_error += 1
+                        print(f"[UPLOAD-EXCEL] Error en operación individual: {str(e2)}")
+        
         # Crear registro de inventario en la colección INVENTARIOS
+        inventario_id = None
         try:
             inventarios_collection = get_collection("INVENTARIOS")
             
-            # Obtener nombre de la farmacia desde la sucursal (si existe relación)
-            # Por ahora usamos la sucursal como farmacia
+            # Obtener nombre de la sucursal/farmacia desde la base de datos
             farmacia_nombre = data.sucursal
             
-            # Intentar obtener el nombre de la farmacia desde la colección de farmacias
+            # Intentar obtener el nombre desde la colección de sucursales
             try:
-                farmacias_collection = get_collection("FARMACIAS")
-                # Intentar buscar por _id como ObjectId primero
+                sucursales_collection = get_collection("SUCURSALES")
                 try:
-                    farmacia_doc = await farmacias_collection.find_one({"_id": ObjectId(data.sucursal)})
+                    sucursal_doc = await sucursales_collection.find_one({"_id": ObjectId(data.sucursal)})
                 except (InvalidId, ValueError):
-                    # Si no es ObjectId válido, buscar como string
-                    farmacia_doc = await farmacias_collection.find_one({"_id": data.sucursal})
-                if farmacia_doc:
-                    farmacia_nombre = farmacia_doc.get("nombre", farmacia_doc.get("farmacia", data.sucursal))
+                    sucursal_doc = await sucursales_collection.find_one({"_id": data.sucursal})
+                if sucursal_doc:
+                    farmacia_nombre = sucursal_doc.get("nombre", sucursal_doc.get("farmacia", data.sucursal))
             except Exception as e:
-                # Si no existe la colección o no se encuentra, usar la sucursal
-                print(f"[UPLOAD-EXCEL] No se pudo obtener nombre de farmacia: {str(e)}")
-                pass
+                print(f"[UPLOAD-EXCEL] No se pudo obtener nombre de sucursal: {str(e)}")
+                # Intentar obtener desde FARMACIAS como fallback
+                try:
+                    farmacias_collection = get_collection("FARMACIAS")
+                    try:
+                        farmacia_doc = await farmacias_collection.find_one({"_id": ObjectId(data.sucursal)})
+                    except (InvalidId, ValueError):
+                        farmacia_doc = await farmacias_collection.find_one({"_id": data.sucursal})
+                    if farmacia_doc:
+                        farmacia_nombre = farmacia_doc.get("nombre", farmacia_doc.get("farmacia", data.sucursal))
+                except Exception as e2:
+                    print(f"[UPLOAD-EXCEL] No se pudo obtener nombre de farmacia: {str(e2)}")
+                    pass
             
             inventario_doc = {
                 "farmacia": farmacia_nombre,
@@ -1099,7 +1149,8 @@ async def upload_excel_inventarios(
             }
             
             resultado_inventario = await inventarios_collection.insert_one(inventario_doc)
-            print(f"[UPLOAD-EXCEL] Inventario creado con ID: {resultado_inventario.inserted_id}")
+            inventario_id = str(resultado_inventario.inserted_id)
+            print(f"[UPLOAD-EXCEL] Inventario creado con ID: {inventario_id}")
             
         except Exception as e:
             # Si falla la creación del inventario, registrar el error pero no fallar todo el proceso
@@ -1116,6 +1167,7 @@ async def upload_excel_inventarios(
             productos_agregados=productos_agregados,
             productos_actualizados=productos_actualizados,
             productos_con_error=productos_con_error,
+            inventario_id=inventario_id,
             errores=errores if errores else None
         )
         
