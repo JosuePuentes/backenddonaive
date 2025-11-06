@@ -1469,6 +1469,7 @@ async def modificar_item_inventario(
         
         # PRIORIDAD 1: Buscar por ObjectId (item_id o _id) si el item_id recibido es un ObjectId
         if es_objectid:
+            # Primero intentar buscar directamente por item_id o _id en los items
             for idx, item in enumerate(items):
                 # Buscar primero por item_id (campo que usamos para items nuevos)
                 item_obj_id = item.get("item_id") or item.get("_id")
@@ -1498,6 +1499,35 @@ async def modificar_item_inventario(
                             campo_usado = "item_id" if item.get("item_id") else "_id"
                             print(f"[MODIFICAR-ITEM] Item encontrado por {campo_usado} (string) en índice {idx}: {item_id_str}")
                             break
+            
+            # Si no se encontró por item_id/_id, el ObjectId podría ser del producto en PRODUCTOS
+            # Buscar el producto por ese ObjectId para obtener su código, luego buscar el item por código
+            if item_index is None:
+                try:
+                    productos_collection = get_collection("PRODUCTOS")
+                    try:
+                        await productos_collection.find_one({})
+                    except:
+                        productos_collection = get_collection("INVENTARIOS")
+                    
+                    producto = await productos_collection.find_one({"_id": ObjectId(item_id)})
+                    if producto:
+                        codigo_producto = producto.get("codigo")
+                        print(f"[MODIFICAR-ITEM] Producto encontrado con ObjectId {item_id}, código: {codigo_producto}")
+                        
+                        # Buscar el item en el inventario por ese código
+                        if codigo_producto:
+                            for idx, item in enumerate(items):
+                                item_codigo = item.get("codigo")
+                                if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                                    item_index = idx
+                                    item_actual = item.copy()
+                                    print(f"[MODIFICAR-ITEM] Item encontrado por código del producto en índice {idx}: {item_codigo}")
+                                    break
+                except (InvalidId, ValueError, TypeError) as e:
+                    print(f"[MODIFICAR-ITEM] No se pudo buscar producto por ObjectId: {str(e)}")
+                except Exception as e:
+                    print(f"[MODIFICAR-ITEM] Error al buscar producto: {str(e)}")
         
         # PRIORIDAD 2: Buscar por código (dentro del inventario especificado)
         if item_index is None:
