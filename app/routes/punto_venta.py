@@ -104,6 +104,103 @@ async def obtener_tasa_del_dia(
         )
 
 
+@router.get("/productos", response_model=List[ProductoItem])
+async def obtener_productos(
+    sucursal: Optional[str] = Query(None, description="ID de la sucursal"),
+    todos: bool = Query(False, description="Si es true, devuelve todos los productos sin límite"),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Obtiene todos los productos de una sucursal.
+    Útil para cargar todos los productos de una vez en modales o listas.
+    
+    Parámetros:
+    - sucursal: ID de la sucursal (requerido si todos=true)
+    - todos: Si es true, devuelve todos los productos sin límite
+    """
+    verificar_permiso(usuario, "agregar_cuadre")
+    
+    if todos and not sucursal:
+        raise HTTPException(
+            status_code=400,
+            detail="El parámetro 'sucursal' es requerido cuando 'todos=true'"
+        )
+    
+    try:
+        productos_collection = get_collection("PRODUCTOS")
+        
+        # Si no existe PRODUCTOS, usar INVENTARIOS
+        try:
+            await productos_collection.find_one({})
+        except:
+            productos_collection = get_collection("INVENTARIOS")
+        
+        # Construir query
+        query = {
+            "estado": "activo"
+        }
+        
+        # Filtrar por sucursal si se proporciona
+        if sucursal:
+            filtro_sucursal = {
+                "$or": [
+                    {"sucursal": sucursal},
+                    {"sucursales": {"$in": [sucursal]}},
+                    {f"stock_sucursal.{sucursal}": {"$exists": True}}
+                ]
+            }
+            query = {
+                "$and": [query, filtro_sucursal]
+            }
+        
+        # Obtener productos (sin límite si todos=true)
+        if todos:
+            productos = await productos_collection.find(query).to_list(length=None)
+        else:
+            # Si no es "todos", usar el endpoint de búsqueda
+            raise HTTPException(
+                status_code=400,
+                detail="Use el endpoint /productos/buscar para búsquedas específicas o pase todos=true para obtener todos los productos"
+            )
+        
+        # Transformar resultados
+        resultado = []
+        for producto in productos:
+            stock = producto.get("stock", 0)
+            precio = producto.get("precio", producto.get("costo", 0))
+            
+            # Obtener stock de la sucursal específica
+            if sucursal:
+                stock_sucursal = producto.get("stock_sucursal", {})
+                if isinstance(stock_sucursal, dict):
+                    stock = stock_sucursal.get(sucursal, stock)
+                elif isinstance(stock_sucursal, list):
+                    for item in stock_sucursal:
+                        if item.get("sucursal") == sucursal:
+                            stock = item.get("stock", stock)
+                            break
+            
+            resultado.append(ProductoItem(
+                id=str(producto["_id"]),
+                nombre=producto.get("nombre", producto.get("farmacia", "Sin nombre")),
+                codigo=producto.get("codigo"),
+                precio=float(precio),
+                precio_usd=None,
+                stock=int(stock),
+                sucursal=sucursal or producto.get("sucursal")
+            ))
+        
+        return resultado
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener productos: {str(e)}"
+        )
+
+
 @router.get("/productos/buscar", response_model=List[ProductoItem])
 async def buscar_productos(
     q: str = Query(..., description="Query de búsqueda (nombre o código)"),
