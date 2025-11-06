@@ -959,6 +959,10 @@ async def upload_excel_inventarios(
         productos_con_error = 0
         errores = []
         
+        # Lista para almacenar los items del inventario
+        items_inventario = []
+        costo_total_inventario = 0.0
+        
         for producto_excel in data.productos:
             try:
                 # Buscar producto por código y sucursal
@@ -968,6 +972,29 @@ async def upload_excel_inventarios(
                 }
                 
                 producto_existente = await productos_collection.find_one(query)
+                
+                # Calcular costo unitario y precio unitario
+                costo_unitario = producto_excel.costo or producto_excel.precio
+                precio_unitario = producto_excel.precio
+                cantidad = producto_excel.stock
+                
+                # Calcular costo total del item (costo_unitario * cantidad)
+                costo_item = costo_unitario * cantidad
+                costo_total_inventario += costo_item
+                
+                # Agregar item al inventario
+                item_inventario = {
+                    "codigo": producto_excel.codigo,
+                    "nombre": producto_excel.nombre,
+                    "descripcion": producto_excel.descripcion,
+                    "cantidad": cantidad,
+                    "costo_unitario": costo_unitario,
+                    "precio_unitario": precio_unitario,
+                    "costo": costo_item,  # Costo total del item
+                    "precio": precio_unitario * cantidad,  # Precio total del item
+                    "utilidad_contable": (precio_unitario - costo_unitario) * cantidad if precio_unitario > 0 and costo_unitario > 0 else 0
+                }
+                items_inventario.append(item_inventario)
                 
                 if producto_existente:
                     # Actualizar producto existente
@@ -1034,10 +1061,56 @@ async def upload_excel_inventarios(
                 errores.append(error_msg)
                 print(error_msg)
         
+        # Crear registro de inventario en la colección INVENTARIOS
+        try:
+            inventarios_collection = get_collection("INVENTARIOS")
+            
+            # Obtener nombre de la farmacia desde la sucursal (si existe relación)
+            # Por ahora usamos la sucursal como farmacia
+            farmacia_nombre = data.sucursal
+            
+            # Intentar obtener el nombre de la farmacia desde la colección de farmacias
+            try:
+                farmacias_collection = get_collection("FARMACIAS")
+                # Intentar buscar por _id como ObjectId primero
+                try:
+                    farmacia_doc = await farmacias_collection.find_one({"_id": ObjectId(data.sucursal)})
+                except (InvalidId, ValueError):
+                    # Si no es ObjectId válido, buscar como string
+                    farmacia_doc = await farmacias_collection.find_one({"_id": data.sucursal})
+                if farmacia_doc:
+                    farmacia_nombre = farmacia_doc.get("nombre", farmacia_doc.get("farmacia", data.sucursal))
+            except Exception as e:
+                # Si no existe la colección o no se encuentra, usar la sucursal
+                print(f"[UPLOAD-EXCEL] No se pudo obtener nombre de farmacia: {str(e)}")
+                pass
+            
+            inventario_doc = {
+                "farmacia": farmacia_nombre,
+                "sucursal": data.sucursal,
+                "costo": costo_total_inventario,
+                "usuarioCorreo": usuario.get("correo", usuario.get("usuarioCorreo")),
+                "fecha": datetime.now().strftime("%Y-%m-%d"),
+                "estado": "activo",
+                "items": items_inventario,
+                "total_items": len(items_inventario),
+                "fecha_creacion": datetime.now().isoformat(),
+                "usuario_creacion": usuario.get("correo", usuario.get("usuarioCorreo"))
+            }
+            
+            resultado_inventario = await inventarios_collection.insert_one(inventario_doc)
+            print(f"[UPLOAD-EXCEL] Inventario creado con ID: {resultado_inventario.inserted_id}")
+            
+        except Exception as e:
+            # Si falla la creación del inventario, registrar el error pero no fallar todo el proceso
+            error_inventario = f"Error al crear el registro de inventario: {str(e)}"
+            errores.append(error_inventario)
+            print(f"[UPLOAD-EXCEL] {error_inventario}")
+        
         total_procesados = len(data.productos)
         
         return UploadExcelResponse(
-            message=f"Procesados {total_procesados} productos. {productos_agregados} agregados, {productos_actualizados} actualizados.",
+            message=f"Procesados {total_procesados} productos. {productos_agregados} agregados, {productos_actualizados} actualizados. Inventario creado.",
             sucursal=data.sucursal,
             total_procesados=total_procesados,
             productos_agregados=productos_agregados,
