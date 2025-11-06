@@ -1451,38 +1451,81 @@ async def modificar_item_inventario(
         if not items:
             raise HTTPException(status_code=404, detail="El inventario no tiene items")
         
-        # Buscar el item por código, item_id, _id o índice
+        # Buscar el item por ObjectId, código o índice dentro del inventario especificado
         item_index = None
         item_actual = None
         
         print(f"[MODIFICAR-ITEM] Buscando item_id: {item_id}, total items: {len(items)}")
         
-        # PRIORIDAD 1: Buscar por código (es el identificador más confiable en items de inventario)
-        for idx, item in enumerate(items):
-            item_codigo = item.get("codigo")
-            if item_codigo:
-                # Normalizar ambos valores para comparación (convertir a string y eliminar espacios)
-                codigo_normalizado = str(item_codigo).strip()
-                item_id_normalizado = str(item_id).strip()
-                
-                # Comparar como strings
-                if codigo_normalizado == item_id_normalizado:
-                    item_index = idx
-                    item_actual = item.copy()
-                    print(f"[MODIFICAR-ITEM] Item encontrado por código en índice {idx}: {item_codigo} (buscado: {item_id})")
-                    break
-                
-                # También intentar comparar como números si ambos son numéricos
-                try:
-                    if float(codigo_normalizado) == float(item_id_normalizado):
+        # Verificar si item_id parece ser un ObjectId válido (24 caracteres hexadecimales)
+        es_objectid = False
+        try:
+            # Intentar crear ObjectId para verificar si es válido
+            test_oid = ObjectId(item_id)
+            es_objectid = True
+            print(f"[MODIFICAR-ITEM] item_id parece ser un ObjectId válido: {item_id}")
+        except (InvalidId, ValueError, TypeError):
+            print(f"[MODIFICAR-ITEM] item_id no es un ObjectId válido, buscaré por código o índice")
+        
+        # PRIORIDAD 1: Buscar por ObjectId (item_id o _id) si el item_id recibido es un ObjectId
+        if es_objectid:
+            for idx, item in enumerate(items):
+                # Buscar primero por item_id (campo que usamos para items nuevos)
+                item_obj_id = item.get("item_id") or item.get("_id")
+                if item_obj_id:
+                    try:
+                        # Convertir a ObjectId para comparación
+                        item_obj_id_obj = ObjectId(item_obj_id) if not isinstance(item_obj_id, ObjectId) else item_obj_id
+                        item_id_obj = ObjectId(item_id)
+                        
+                        if item_obj_id_obj == item_id_obj:
+                            item_index = idx
+                            item_actual = item.copy()
+                            campo_usado = "item_id" if item.get("item_id") else "_id"
+                            print(f"[MODIFICAR-ITEM] Item encontrado por {campo_usado} (ObjectId) en índice {idx}: {item_obj_id}")
+                            break
+                    except (InvalidId, ValueError, TypeError):
+                        # Si no se puede convertir a ObjectId, comparar como string
+                        item_id_str = str(item_obj_id)
+                        item_id_normalizado = str(item_id).strip()
+                        item_id_str_normalizado = item_id_str.strip()
+                        
+                        if (item_id_str_normalizado == item_id_normalizado or 
+                            item_id_str_normalizado.endswith(item_id_normalizado) or 
+                            item_id_normalizado.endswith(item_id_str_normalizado)):
+                            item_index = idx
+                            item_actual = item.copy()
+                            campo_usado = "item_id" if item.get("item_id") else "_id"
+                            print(f"[MODIFICAR-ITEM] Item encontrado por {campo_usado} (string) en índice {idx}: {item_id_str}")
+                            break
+        
+        # PRIORIDAD 2: Buscar por código (dentro del inventario especificado)
+        if item_index is None:
+            for idx, item in enumerate(items):
+                item_codigo = item.get("codigo")
+                if item_codigo:
+                    # Normalizar ambos valores para comparación (convertir a string y eliminar espacios)
+                    codigo_normalizado = str(item_codigo).strip()
+                    item_id_normalizado = str(item_id).strip()
+                    
+                    # Comparar como strings
+                    if codigo_normalizado == item_id_normalizado:
                         item_index = idx
                         item_actual = item.copy()
-                        print(f"[MODIFICAR-ITEM] Item encontrado por código (numérico) en índice {idx}: {item_codigo} (buscado: {item_id})")
+                        print(f"[MODIFICAR-ITEM] Item encontrado por código en índice {idx}: {item_codigo} (buscado: {item_id})")
                         break
-                except (ValueError, TypeError):
-                    pass
+                    
+                    # También intentar comparar como números si ambos son numéricos
+                    try:
+                        if float(codigo_normalizado) == float(item_id_normalizado):
+                            item_index = idx
+                            item_actual = item.copy()
+                            print(f"[MODIFICAR-ITEM] Item encontrado por código (numérico) en índice {idx}: {item_codigo} (buscado: {item_id})")
+                            break
+                    except (ValueError, TypeError):
+                        pass
         
-        # PRIORIDAD 2: Buscar por índice numérico
+        # PRIORIDAD 3: Buscar por índice numérico
         if item_index is None:
             try:
                 idx_num = int(item_id)
@@ -1492,43 +1535,6 @@ async def modificar_item_inventario(
                     print(f"[MODIFICAR-ITEM] Item encontrado por índice: {idx_num}")
             except ValueError:
                 pass
-        
-        # PRIORIDAD 3: Buscar por item_id o _id (si existen)
-        if item_index is None:
-            for idx, item in enumerate(items):
-                # Buscar primero por item_id (campo que usamos para items nuevos)
-                item_obj_id = item.get("item_id") or item.get("_id")
-                if item_obj_id:
-                    # Convertir a string para comparación
-                    item_id_str = str(item_obj_id)
-                    # Normalizar ambos IDs eliminando espacios y comparar
-                    item_id_normalizado = str(item_id).strip()
-                    item_id_str_normalizado = item_id_str.strip()
-                    
-                    # Comparaciones múltiples para asegurar que encuentre el item
-                    if (item_id_str_normalizado == item_id_normalizado or 
-                        item_id_str_normalizado.endswith(item_id_normalizado) or 
-                        item_id_normalizado.endswith(item_id_str_normalizado) or
-                        item_id_str_normalizado == item_id_normalizado.replace("-", "").replace("_", "") or
-                        item_id_normalizado == item_id_str_normalizado.replace("-", "").replace("_", "")):
-                        item_index = idx
-                        item_actual = item.copy()
-                        campo_usado = "item_id" if item.get("item_id") else "_id"
-                        print(f"[MODIFICAR-ITEM] Item encontrado por {campo_usado} en índice {idx}: {item_id_str} (buscado: {item_id})")
-                        break
-                    
-                    # También intentar comparar como ObjectId si es posible
-                    try:
-                        item_obj_id_obj = ObjectId(item_obj_id) if not isinstance(item_obj_id, ObjectId) else item_obj_id
-                        item_id_obj = ObjectId(item_id)
-                        if item_obj_id_obj == item_id_obj:
-                            item_index = idx
-                            item_actual = item.copy()
-                            campo_usado = "item_id" if item.get("item_id") else "_id"
-                            print(f"[MODIFICAR-ITEM] Item encontrado por {campo_usado} (ObjectId) en índice {idx}: {item_obj_id}")
-                            break
-                    except (InvalidId, ValueError, TypeError):
-                        pass
         
         if item_index is None:
             print(f"[MODIFICAR-ITEM] ERROR: Item no encontrado. item_id recibido: {item_id}, tipo: {type(item_id)}")
