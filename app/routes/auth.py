@@ -1500,9 +1500,92 @@ async def modificar_item_inventario(
         
         item_id_normalizado = str(item_id).strip()
         
-        # ✅ PRIORIDAD 1: Buscar por _id (ObjectId) del item directamente
-        # Esta es la búsqueda correcta según las instrucciones
-        if es_objectid:
+        # ✅ PRIORIDAD 1: Buscar por código del producto en PRODUCTOS
+        # El frontend envía el código del producto, no el item_id interno
+        try:
+            productos_collection = get_collection("PRODUCTOS")
+            try:
+                await productos_collection.find_one({})
+            except:
+                productos_collection = get_collection("INVENTARIOS")
+            
+            # Intentar buscar el producto por código (si item_id es un código)
+            producto = None
+            codigo_producto = None
+            
+            # Si es ObjectId, buscar producto por _id
+            if es_objectid:
+                producto = await productos_collection.find_one({"_id": ObjectId(item_id)})
+                if producto:
+                    codigo_producto = producto.get("codigo")
+            else:
+                # Si no es ObjectId, asumir que es el código del producto
+                codigo_producto = item_id_normalizado
+                producto = await productos_collection.find_one({"codigo": codigo_producto})
+            
+            # Si encontramos el producto, buscar el item en el inventario por su código
+            if producto and codigo_producto is not None:
+                codigo_producto_str = str(codigo_producto).strip()
+                codigo_producto_num = None
+                try:
+                    codigo_producto_num = float(codigo_producto_str)
+                except (ValueError, TypeError):
+                    pass
+                
+                # Buscar el item en el inventario por ese código
+                for idx, item in enumerate(items):
+                    item_codigo = item.get("codigo")
+                    if item_codigo is not None:
+                        item_codigo_str = str(item_codigo).strip()
+                        
+                        # Comparar como strings exactos
+                        if item_codigo_str == codigo_producto_str:
+                            item_index = idx
+                            item_actual = item.copy()
+                            print(f"[MODIFICAR-ITEM] Item encontrado por código del producto: {codigo_producto_str}")
+                            
+                            # Si el item no tiene inventario_id, agregarlo automáticamente
+                            item_inventario_id = str(item_actual.get("inventario_id", ""))
+                            inventario_id_str = str(inventario_id)
+                            if not item_inventario_id:
+                                print(f"[MODIFICAR-ITEM] Item no tiene inventario_id, agregándolo automáticamente")
+                                await collection.update_one(
+                                    {"_id": ObjectId(inventario_id)},
+                                    {"$set": {f"items.{idx}.inventario_id": inventario_id_str}}
+                                )
+                                item_actual["inventario_id"] = inventario_id_str
+                            
+                            break
+                        
+                        # Comparar como números si ambos son numéricos
+                        if codigo_producto_num is not None:
+                            try:
+                                item_codigo_num = float(item_codigo_str)
+                                if abs(item_codigo_num - codigo_producto_num) < 0.0001:
+                                    item_index = idx
+                                    item_actual = item.copy()
+                                    print(f"[MODIFICAR-ITEM] Item encontrado por código del producto (numérico): {codigo_producto_str}")
+                                    
+                                    # Si el item no tiene inventario_id, agregarlo automáticamente
+                                    item_inventario_id = str(item_actual.get("inventario_id", ""))
+                                    inventario_id_str = str(inventario_id)
+                                    if not item_inventario_id:
+                                        print(f"[MODIFICAR-ITEM] Item no tiene inventario_id, agregándolo automáticamente")
+                                        await collection.update_one(
+                                            {"_id": ObjectId(inventario_id)},
+                                            {"$set": {f"items.{idx}.inventario_id": inventario_id_str}}
+                                        )
+                                        item_actual["inventario_id"] = inventario_id_str
+                                    
+                                    break
+                            except (ValueError, TypeError):
+                                pass
+        except Exception as e:
+            print(f"[MODIFICAR-ITEM] Error al buscar producto: {str(e)}")
+            pass  # Continuar con otras búsquedas
+        
+        # PRIORIDAD 2: Si no se encontró por código del producto, buscar por _id (ObjectId) del item directamente
+        if item_index is None and es_objectid:
             for idx, item in enumerate(items):
                 item_obj_id = item.get("item_id") or item.get("_id")
                 if item_obj_id:
@@ -1545,7 +1628,7 @@ async def modificar_item_inventario(
                             
                             break
         
-        # PRIORIDAD 2: Si no se encontró por ObjectId, buscar por código
+        # PRIORIDAD 3: Si no se encontró, buscar por código directamente en items
         if item_index is None:
             item_id_num = None
             try:
@@ -1564,6 +1647,18 @@ async def modificar_item_inventario(
                         item_index = idx
                         item_actual = item.copy()
                         print(f"[MODIFICAR-ITEM] Item encontrado por código: {item_id}")
+                        
+                        # Si el item no tiene inventario_id, agregarlo automáticamente
+                        item_inventario_id = str(item_actual.get("inventario_id", ""))
+                        inventario_id_str = str(inventario_id)
+                        if not item_inventario_id:
+                            print(f"[MODIFICAR-ITEM] Item no tiene inventario_id, agregándolo automáticamente")
+                            await collection.update_one(
+                                {"_id": ObjectId(inventario_id)},
+                                {"$set": {f"items.{idx}.inventario_id": inventario_id_str}}
+                            )
+                            item_actual["inventario_id"] = inventario_id_str
+                        
                         break
                     
                     # Comparar como números si ambos son numéricos
@@ -1574,55 +1669,21 @@ async def modificar_item_inventario(
                                 item_index = idx
                                 item_actual = item.copy()
                                 print(f"[MODIFICAR-ITEM] Item encontrado por código (numérico): {item_id}")
+                                
+                                # Si el item no tiene inventario_id, agregarlo automáticamente
+                                item_inventario_id = str(item_actual.get("inventario_id", ""))
+                                inventario_id_str = str(inventario_id)
+                                if not item_inventario_id:
+                                    print(f"[MODIFICAR-ITEM] Item no tiene inventario_id, agregándolo automáticamente")
+                                    await collection.update_one(
+                                        {"_id": ObjectId(inventario_id)},
+                                        {"$set": {f"items.{idx}.inventario_id": inventario_id_str}}
+                                    )
+                                    item_actual["inventario_id"] = inventario_id_str
+                                
                                 break
                         except (ValueError, TypeError):
                             pass
-        
-        # PRIORIDAD 3: Si es ObjectId y no se encontró, podría ser del producto en PRODUCTOS
-        if item_index is None and es_objectid:
-            try:
-                productos_collection = get_collection("PRODUCTOS")
-                try:
-                    await productos_collection.find_one({})
-                except:
-                    productos_collection = get_collection("INVENTARIOS")
-                
-                producto = await productos_collection.find_one({"_id": ObjectId(item_id)})
-                if producto:
-                    codigo_producto = producto.get("codigo")
-                    if codigo_producto is not None:
-                        codigo_producto_str = str(codigo_producto).strip()
-                        codigo_producto_num = None
-                        try:
-                            codigo_producto_num = float(codigo_producto_str)
-                        except (ValueError, TypeError):
-                            pass
-                        
-                        # Buscar el item en el inventario por ese código
-                        for idx, item in enumerate(items):
-                            item_codigo = item.get("codigo")
-                            if item_codigo is not None:
-                                item_codigo_str = str(item_codigo).strip()
-                                
-                                if item_codigo_str == codigo_producto_str:
-                                    item_index = idx
-                                    item_actual = item.copy()
-                                    print(f"[MODIFICAR-ITEM] Item encontrado por código del producto: {codigo_producto_str}")
-                                    break
-                                
-                                if codigo_producto_num is not None:
-                                    try:
-                                        item_codigo_num = float(item_codigo_str)
-                                        if abs(item_codigo_num - codigo_producto_num) < 0.0001:
-                                            item_index = idx
-                                            item_actual = item.copy()
-                                            print(f"[MODIFICAR-ITEM] Item encontrado por código del producto (numérico): {codigo_producto_str}")
-                                            break
-                                    except (ValueError, TypeError):
-                                        pass
-            except Exception as e:
-                print(f"[MODIFICAR-ITEM] Error al buscar producto: {str(e)}")
-                pass  # Silenciar errores, continuar con búsqueda por índice
         
         # PRIORIDAD 4: Buscar por índice numérico
         if item_index is None:
