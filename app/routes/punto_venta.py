@@ -213,11 +213,9 @@ async def buscar_productos(
     """
     verificar_permiso(usuario, "agregar_cuadre")
     
-    if not q or len(q.strip()) < 2:
-        raise HTTPException(
-            status_code=400,
-            detail="La búsqueda debe tener al menos 2 caracteres"
-        )
+    # Si la búsqueda tiene menos de 1 carácter, devolver array vacío
+    if not q or len(q.strip()) < 1:
+        return []
     
     try:
         # Buscar en la colección de productos/inventarios
