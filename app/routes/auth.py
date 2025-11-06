@@ -995,8 +995,9 @@ async def upload_excel_inventarios(
                 costo_item = costo_unitario * cantidad
                 costo_total_inventario += costo_item
                 
-                # Agregar item al inventario
+                # Agregar item al inventario con _id para facilitar la búsqueda posterior
                 item_inventario = {
+                    "_id": str(ObjectId()),  # Generar ID único para cada item
                     "codigo": producto_excel.codigo,
                     "nombre": producto_excel.nombre,
                     "descripcion": producto_excel.descripcion,
@@ -1448,28 +1449,46 @@ async def modificar_item_inventario(
         item_index = None
         item_actual = None
         
+        print(f"[MODIFICAR-ITEM] Buscando item_id: {item_id}, total items: {len(items)}")
+        
         # Intentar buscar por índice numérico primero
         try:
             idx_num = int(item_id)
             if 0 <= idx_num < len(items):
                 item_index = idx_num
                 item_actual = items[idx_num].copy()
+                print(f"[MODIFICAR-ITEM] Item encontrado por índice: {idx_num}")
         except ValueError:
             pass
         
-        # Si no se encontró por índice, buscar por _id
+        # Si no se encontró por índice, buscar por _id (como string o ObjectId)
         if item_index is None:
             for idx, item in enumerate(items):
                 item_obj_id = item.get("_id")
-                # Comparar como string o como ObjectId
+                # Comparar como string
                 if item_obj_id:
-                    if str(item_obj_id) == item_id:
+                    item_id_str = str(item_obj_id)
+                    # Comparar directamente o con los últimos caracteres (por si hay diferencias de formato)
+                    if item_id_str == item_id or item_id_str.endswith(item_id) or item_id.endswith(item_id_str):
                         item_index = idx
                         item_actual = item.copy()
+                        print(f"[MODIFICAR-ITEM] Item encontrado por _id en índice {idx}: {item_id_str}")
                         break
         
+        # Si aún no se encontró, buscar por código como último recurso
         if item_index is None:
-            raise HTTPException(status_code=404, detail="Item no encontrado en el inventario")
+            for idx, item in enumerate(items):
+                item_codigo = item.get("codigo")
+                if item_codigo and str(item_codigo) == item_id:
+                    item_index = idx
+                    item_actual = item.copy()
+                    print(f"[MODIFICAR-ITEM] Item encontrado por código en índice {idx}: {item_codigo}")
+                    break
+        
+        if item_index is None:
+            print(f"[MODIFICAR-ITEM] ERROR: Item no encontrado. item_id recibido: {item_id}")
+            print(f"[MODIFICAR-ITEM] Items disponibles: {[(i, item.get('_id'), item.get('codigo')) for i, item in enumerate(items[:5])]}")
+            raise HTTPException(status_code=404, detail=f"Item no encontrado en el inventario. item_id: {item_id}")
         
         # Preparar los datos a actualizar
         update_data = {}
@@ -1496,18 +1515,29 @@ async def modificar_item_inventario(
         
         # Obtener valores actuales o nuevos para calcular utilidad
         cantidad = update_data.get("cantidad", item_actual.get("cantidad", 0))
-        precio_unitario = update_data.get("precio_unitario", item_actual.get("precio_unitario", 0))
-        costo_unitario = update_data.get("costo_unitario", item_actual.get("costo_unitario", 0))
+        precio_unitario = update_data.get("precio_unitario", item_actual.get("precio_unitario", item_actual.get("precio", 0)))
+        costo_unitario = update_data.get("costo_unitario", item_actual.get("costo_unitario", item_actual.get("costo", 0)))
+        
+        # Si costo_unitario viene como "costo" (total), calcularlo unitario
+        if "costo_unitario" not in update_data and item_actual.get("costo") and not item_actual.get("costo_unitario"):
+            costo_total_item = item_actual.get("costo", 0)
+            cantidad_actual = item_actual.get("cantidad", 1)
+            if cantidad_actual > 0:
+                costo_unitario = costo_total_item / cantidad_actual
+        
+        print(f"[MODIFICAR-ITEM] Valores para cálculo: cantidad={cantidad}, precio_unitario={precio_unitario}, costo_unitario={costo_unitario}")
         
         # Calcular utilidad contable
         # Utilidad contable = (precio_unitario - costo_unitario) * cantidad
         if precio_unitario > 0 and costo_unitario > 0 and cantidad > 0:
             utilidad_contable = (precio_unitario - costo_unitario) * cantidad
             update_data["utilidad_contable"] = utilidad_contable
+            print(f"[MODIFICAR-ITEM] Utilidad contable calculada: {utilidad_contable} = ({precio_unitario} - {costo_unitario}) * {cantidad}")
         
-        # Si se proporciona utilidad_contable manualmente, usarla
+        # Si se proporciona utilidad_contable manualmente, usarla (sobrescribe el cálculo)
         if data.utilidad_contable is not None:
             update_data["utilidad_contable"] = data.utilidad_contable
+            print(f"[MODIFICAR-ITEM] Utilidad contable proporcionada manualmente: {data.utilidad_contable}")
         
         # Actualizar el item en el array
         if update_data:
