@@ -875,41 +875,72 @@ async def upload_excel_inventarios(
       ]
     }
     """
+    import sys
     try:
+        # Log inicial para debugging
+        print(f"[UPLOAD-EXCEL] Iniciando proceso. Tipo de data: {type(data)}")
+        print(f"[UPLOAD-EXCEL] Keys en data: {list(data.keys()) if isinstance(data, dict) else 'No es dict'}")
+        print(f"[UPLOAD-EXCEL] Tiene sucursal: {'sucursal' in data if isinstance(data, dict) else False}")
+        print(f"[UPLOAD-EXCEL] Tiene productos: {'productos' in data if isinstance(data, dict) else False}")
+        
+        if isinstance(data, dict) and "productos" in data:
+            productos_count = len(data.get("productos", []))
+            print(f"[UPLOAD-EXCEL] Cantidad de productos: {productos_count}")
+            if productos_count > 0:
+                primer_producto = data["productos"][0]
+                print(f"[UPLOAD-EXCEL] Primer producto keys: {list(primer_producto.keys()) if isinstance(primer_producto, dict) else 'No es dict'}")
+        
         # Validar estructura básica
         if not isinstance(data, dict):
+            print(f"[UPLOAD-EXCEL] ERROR: data no es dict, es {type(data)}")
             raise HTTPException(status_code=422, detail="Los datos deben ser un objeto JSON")
         
         # Validar campos requeridos
         if "sucursal" not in data or not data.get("sucursal"):
+            print(f"[UPLOAD-EXCEL] ERROR: Falta campo 'sucursal'")
             raise HTTPException(status_code=422, detail="El campo 'sucursal' es requerido")
         
-        if "productos" not in data or not isinstance(data.get("productos"), list):
+        if "productos" not in data:
+            print(f"[UPLOAD-EXCEL] ERROR: Falta campo 'productos'")
             raise HTTPException(
                 status_code=422, 
                 detail="El campo 'productos' es requerido y debe ser un array"
             )
         
+        if not isinstance(data.get("productos"), list):
+            print(f"[UPLOAD-EXCEL] ERROR: 'productos' no es una lista, es {type(data.get('productos'))}")
+            raise HTTPException(
+                status_code=422, 
+                detail="El campo 'productos' debe ser un array"
+            )
+        
         if len(data.get("productos", [])) == 0:
+            print(f"[UPLOAD-EXCEL] ERROR: Array 'productos' está vacío")
             raise HTTPException(status_code=422, detail="El array 'productos' no puede estar vacío")
         
         # Convertir a modelo Pydantic para validación
         from pydantic import ValidationError
         try:
+            print(f"[UPLOAD-EXCEL] Intentando validar con Pydantic...")
             request_data = UploadExcelRequest(**data)
+            print(f"[UPLOAD-EXCEL] Validación Pydantic exitosa")
         except ValidationError as e:
             # Si falla la validación de Pydantic, proporcionar mensaje más claro
+            print(f"[UPLOAD-EXCEL] ERROR de validación Pydantic: {e}")
             errors = []
             for error in e.errors():
                 field = " -> ".join(str(x) for x in error.get("loc", []))
                 msg = error.get("msg", "Error de validación")
                 errors.append(f"{field}: {msg}")
+            error_msg = f"Error de validación: {'; '.join(errors)}"
+            print(f"[UPLOAD-EXCEL] {error_msg}")
             raise HTTPException(
                 status_code=422,
-                detail=f"Error de validación: {'; '.join(errors)}"
+                detail=error_msg
             )
         except Exception as e:
             error_msg = str(e)
+            print(f"[UPLOAD-EXCEL] ERROR inesperado en validación: {error_msg}")
             raise HTTPException(status_code=422, detail=f"Error de validación: {error_msg}")
         
         # Usar el modelo validado
