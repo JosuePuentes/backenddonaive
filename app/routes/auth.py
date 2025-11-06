@@ -1466,25 +1466,34 @@ async def modificar_item_inventario(
     Utilidad contable = (precio_unitario - costo_unitario) * cantidad
     """
     try:
+        print(f"[MODIFICAR-ITEM] ========== INICIO ==========")
+        print(f"[MODIFICAR-ITEM] Paso 1: Validando permisos y parámetros")
+        print(f"[MODIFICAR-ITEM] item_id recibido: {item_id}")
+        print(f"[MODIFICAR-ITEM] inventario_id recibido: {inventario_id}")
+        print(f"[MODIFICAR-ITEM] usuario: {usuario.get('correo', usuario.get('usuarioCorreo', 'N/A'))}")
+        print(f"[MODIFICAR-ITEM] data recibida: {data.dict() if hasattr(data, 'dict') else data}")
+        
         collection = get_collection("INVENTARIOS")
         
+        print(f"[MODIFICAR-ITEM] Paso 2: Buscando inventario")
         # Verificar que el inventario existe y no está eliminado
         inventario = await collection.find_one({"_id": ObjectId(inventario_id)})
         if not inventario:
+            print(f"[MODIFICAR-ITEM] ERROR: Inventario no encontrado")
             raise HTTPException(status_code=404, detail="Inventario no encontrado")
+        print(f"[MODIFICAR-ITEM] Inventario encontrado: {inventario_id}, estado: {inventario.get('estado', 'N/A')}")
         
         # Verificar que el inventario no esté eliminado
         if inventario.get("estado") == "eliminado":
+            print(f"[MODIFICAR-ITEM] ERROR: Inventario está eliminado")
             raise HTTPException(status_code=400, detail="No se puede modificar un inventario eliminado. Debe restaurarlo primero.")
         
         # Verificar que el inventario tiene items
         items = inventario.get("items", [])
         if not items:
+            print(f"[MODIFICAR-ITEM] ERROR: Inventario no tiene items")
             raise HTTPException(status_code=404, detail="El inventario no tiene items")
-        
-        # Agregar logs temporales para depurar
-        print(f"[MODIFICAR-ITEM] item_id recibido: {item_id}")
-        print(f"[MODIFICAR-ITEM] inventario_id recibido: {inventario_id}")
+        print(f"[MODIFICAR-ITEM] Inventario tiene {len(items)} items")
         
         # Buscar el item por ObjectId (_id o item_id), código o índice dentro del inventario especificado
         item_index = None
@@ -1710,31 +1719,49 @@ async def modificar_item_inventario(
             )
         
         # Log final del item encontrado
+        print(f"[MODIFICAR-ITEM] Paso 3: Item encontrado exitosamente")
         print(f"[MODIFICAR-ITEM] Item encontrado: {item_actual.get('_id') or item_actual.get('item_id')}")
         print(f"[MODIFICAR-ITEM] inventario_id del item: {item_actual.get('inventario_id', 'No tiene inventario_id')}")
+        print(f"[MODIFICAR-ITEM] item_index: {item_index}")
+        print(f"[MODIFICAR-ITEM] Item actual completo: {item_actual}")
         
+        print(f"[MODIFICAR-ITEM] Paso 4: Preparando datos para actualizar")
         # Preparar los datos a actualizar
         update_data = {}
         
         # Actualizar campos básicos si se proporcionan
+        print(f"[MODIFICAR-ITEM] Validando campos del request body")
         if data.nombre is not None:
+            print(f"[MODIFICAR-ITEM] nombre: {data.nombre}")
             update_data["nombre"] = data.nombre
         if data.codigo is not None:
+            print(f"[MODIFICAR-ITEM] codigo: {data.codigo}")
             update_data["codigo"] = data.codigo
         if data.cantidad is not None:
+            print(f"[MODIFICAR-ITEM] cantidad recibida: {data.cantidad} (tipo: {type(data.cantidad)})")
             if data.cantidad < 0:
+                print(f"[MODIFICAR-ITEM] ERROR: Cantidad negativa")
                 raise HTTPException(status_code=400, detail="La cantidad no puede ser negativa")
+            # Permitir cantidad = 0 (puede ser válido para ajustes de inventario)
             update_data["cantidad"] = data.cantidad
+            print(f"[MODIFICAR-ITEM] cantidad agregada a update_data: {update_data['cantidad']}")
         if data.precio_unitario is not None:
+            print(f"[MODIFICAR-ITEM] precio_unitario: {data.precio_unitario}")
             if data.precio_unitario < 0:
+                print(f"[MODIFICAR-ITEM] ERROR: Precio unitario negativo")
                 raise HTTPException(status_code=400, detail="El precio unitario no puede ser negativo")
             update_data["precio_unitario"] = data.precio_unitario
         if data.costo_unitario is not None:
+            print(f"[MODIFICAR-ITEM] costo_unitario: {data.costo_unitario}")
             if data.costo_unitario < 0:
+                print(f"[MODIFICAR-ITEM] ERROR: Costo unitario negativo")
                 raise HTTPException(status_code=400, detail="El costo unitario no puede ser negativo")
             update_data["costo_unitario"] = data.costo_unitario
         if data.descripcion is not None:
+            print(f"[MODIFICAR-ITEM] descripcion: {data.descripcion}")
             update_data["descripcion"] = data.descripcion
+        
+        print(f"[MODIFICAR-ITEM] update_data después de validar campos: {update_data}")
         
         # Obtener valores actuales o nuevos para calcular utilidad
         cantidad = update_data.get("cantidad", item_actual.get("cantidad", 0))
@@ -1763,11 +1790,20 @@ async def modificar_item_inventario(
             print(f"[MODIFICAR-ITEM] Utilidad contable proporcionada manualmente: {data.utilidad_contable}")
         
         # Actualizar el item en el array
+        print(f"[MODIFICAR-ITEM] Paso 5: Verificando si hay datos para actualizar")
+        print(f"[MODIFICAR-ITEM] update_data tiene {len(update_data)} campos: {list(update_data.keys())}")
+        
         if update_data:
+            print(f"[MODIFICAR-ITEM] Paso 6: Construyendo campos de actualización")
             # Construir el path del campo a actualizar
             update_fields = {}
             for key, value in update_data.items():
-                update_fields[f"items.{item_index}.{key}"] = value
+                field_path = f"items.{item_index}.{key}"
+                update_fields[field_path] = value
+                print(f"[MODIFICAR-ITEM] Campo a actualizar: {field_path} = {value}")
+            
+            print(f"[MODIFICAR-ITEM] update_fields completo: {update_fields}")
+            print(f"[MODIFICAR-ITEM] Paso 7: Ejecutando actualización en MongoDB")
             
             # Actualizar el item
             result = await collection.update_one(
@@ -1775,12 +1811,26 @@ async def modificar_item_inventario(
                 {"$set": update_fields}
             )
             
+            print(f"[MODIFICAR-ITEM] Resultado de update_one:")
+            print(f"[MODIFICAR-ITEM]   - matched_count: {result.matched_count}")
+            print(f"[MODIFICAR-ITEM]   - modified_count: {result.modified_count}")
+            print(f"[MODIFICAR-ITEM]   - upserted_id: {result.upserted_id}")
+            
             if result.modified_count == 0:
+                print(f"[MODIFICAR-ITEM] ERROR: No se pudo actualizar el item (modified_count = 0)")
+                print(f"[MODIFICAR-ITEM] Posibles causas:")
+                print(f"[MODIFICAR-ITEM]   - El item ya tiene esos valores")
+                print(f"[MODIFICAR-ITEM]   - El item_index ({item_index}) es incorrecto")
+                print(f"[MODIFICAR-ITEM]   - El inventario_id ({inventario_id}) es incorrecto")
                 raise HTTPException(status_code=404, detail="No se pudo actualizar el item")
             
+            print(f"[MODIFICAR-ITEM] Item actualizado exitosamente en MongoDB")
+            
+            print(f"[MODIFICAR-ITEM] Paso 8: Recalculando costo total del inventario")
             # Recalcular el costo total del inventario
             inventario_actualizado = await collection.find_one({"_id": ObjectId(inventario_id)})
             items_actualizados = inventario_actualizado.get("items", [])
+            print(f"[MODIFICAR-ITEM] Items actualizados: {len(items_actualizados)}")
             
             # Calcular costo total: suma de (costo_unitario * cantidad) de todos los items
             costo_total = 0.0
@@ -1789,15 +1839,29 @@ async def modificar_item_inventario(
                 cantidad_item = item.get("cantidad", 0)
                 costo_total += costo_unit * cantidad_item
             
+            print(f"[MODIFICAR-ITEM] Costo total calculado: {costo_total}")
+            
             # Actualizar el costo total del inventario
-            await collection.update_one(
+            print(f"[MODIFICAR-ITEM] Paso 9: Actualizando costo total del inventario")
+            result_costo = await collection.update_one(
                 {"_id": ObjectId(inventario_id)},
                 {"$set": {"costo": costo_total}}
             )
+            print(f"[MODIFICAR-ITEM] Costo total actualizado: modified_count={result_costo.modified_count}")
             
             # Obtener el item actualizado para retornarlo
+            print(f"[MODIFICAR-ITEM] Paso 10: Obteniendo item actualizado para respuesta")
             inventario_final = await collection.find_one({"_id": ObjectId(inventario_id)})
-            item_actualizado = inventario_final.get("items", [])[item_index]
+            items_final = inventario_final.get("items", [])
+            print(f"[MODIFICAR-ITEM] Items finales: {len(items_final)}, item_index: {item_index}")
+            
+            if item_index >= len(items_final):
+                print(f"[MODIFICAR-ITEM] ERROR: item_index ({item_index}) fuera de rango (items: {len(items_final)})")
+                raise HTTPException(status_code=500, detail="Error al obtener el item actualizado")
+            
+            item_actualizado = items_final[item_index]
+            print(f"[MODIFICAR-ITEM] Item actualizado obtenido: {item_actualizado}")
+            
             # Asegurar que el item tenga item_id o _id para la respuesta
             if not item_actualizado.get("item_id") and not item_actualizado.get("_id"):
                 item_actualizado["item_id"] = item_id
@@ -1806,19 +1870,33 @@ async def modificar_item_inventario(
             elif item_actualizado.get("_id"):
                 item_actualizado["_id"] = str(item_actualizado["_id"])
             
-            return {
+            print(f"[MODIFICAR-ITEM] Paso 11: Preparando respuesta")
+            respuesta = {
                 "message": "Item actualizado exitosamente",
                 "item": item_actualizado,
                 "costo_total_inventario": costo_total
             }
+            print(f"[MODIFICAR-ITEM] Respuesta preparada: {respuesta}")
+            print(f"[MODIFICAR-ITEM] ========== ÉXITO ==========")
+            return respuesta
         else:
+            print(f"[MODIFICAR-ITEM] ERROR: No se proporcionaron campos para actualizar")
+            print(f"[MODIFICAR-ITEM] update_data está vacío: {update_data}")
             raise HTTPException(status_code=400, detail="No se proporcionaron campos para actualizar")
             
-    except InvalidId:
+    except InvalidId as e:
+        print(f"[MODIFICAR-ITEM] ERROR InvalidId: {str(e)}")
+        import traceback
+        print(f"[MODIFICAR-ITEM] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=400, detail="ID de inventario o item inválido")
-    except HTTPException:
+    except HTTPException as e:
+        print(f"[MODIFICAR-ITEM] ERROR HTTPException: status={e.status_code}, detail={e.detail}")
         raise
     except Exception as e:
+        print(f"[MODIFICAR-ITEM] ERROR Exception: {type(e).__name__}: {str(e)}")
+        import traceback
+        print(f"[MODIFICAR-ITEM] Traceback completo:")
+        print(traceback.format_exc())
         raise HTTPException(
             status_code=500,
             detail=f"Error al modificar el item: {str(e)}"
