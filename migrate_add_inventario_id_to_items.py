@@ -14,6 +14,11 @@ import asyncio
 import sys
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde .env
+env_path = Path(__file__).parent / '.env'
+load_dotenv(env_path)
 
 # Agregar el directorio raíz al path para importar módulos
 sys.path.insert(0, str(Path(__file__).parent))
