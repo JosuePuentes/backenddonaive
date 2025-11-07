@@ -717,12 +717,21 @@ async def registrar_venta(
         ventas_hoy = await ventas_collection.count_documents({"fecha": fecha_actual})
         numero_factura = f"FAC-{fecha_actual.replace('-', '')}-{ventas_hoy + 1:04d}"
         
+        # Validar consistencia de descuentos (opcional, solo si se proporcionan)
+        if venta.porcentaje_descuento is not None:
+            # Verificar que los descuentos en items sean consistentes con el descuento de la venta
+            for item in venta.items:
+                if item.descuento_aplicado is not None:
+                    # Permitir pequeñas diferencias por redondeo (0.1%)
+                    if abs(item.descuento_aplicado - venta.porcentaje_descuento) > 0.1:
+                        print(f"[REGISTRAR-VENTA] Advertencia: Descuento en item ({item.descuento_aplicado}%) no coincide con descuento de venta ({venta.porcentaje_descuento}%)")
+        
         # Preparar documento de venta
         venta_doc = {
             "numero_factura": numero_factura,
             "fecha": fecha_actual,
             "fecha_hora": datetime.now().isoformat(),
-            "items": [item.dict() for item in venta.items],
+            "items": [item.dict() for item in venta.items],  # Incluye todos los campos de descuento
             "metodos_pago": [mp.dict() for mp in venta.metodos_pago],
             "total_bs": venta.total_bs,
             "total_usd": venta.total_usd,
@@ -730,6 +739,7 @@ async def registrar_venta(
             "sucursal": venta.sucursal,
             "cajero": venta.cajero or usuario.get("correo", usuario.get("usuarioCorreo")),
             "cliente": venta.cliente,
+            "porcentaje_descuento": venta.porcentaje_descuento,  # Almacenar descuento a nivel de venta
             "notas": venta.notas,
             "usuario_registro": usuario.get("correo", usuario.get("usuarioCorreo"))
         }

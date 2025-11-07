@@ -48,10 +48,13 @@ class ItemVenta(BaseModel):
     nombre: str
     codigo: Optional[str] = None
     cantidad: int
-    precio_unitario: float
-    precio_unitario_usd: Optional[float] = None
-    subtotal: float
-    subtotal_usd: Optional[float] = None
+    precio_unitario: float  # Precio en Bs CON descuento
+    precio_unitario_usd: Optional[float] = None  # Precio en USD CON descuento
+    precio_unitario_original: Optional[float] = None  # Precio original en Bs SIN descuento
+    precio_unitario_original_usd: Optional[float] = None  # Precio original en USD SIN descuento
+    subtotal: float  # Subtotal en Bs CON descuento
+    subtotal_usd: Optional[float] = None  # Subtotal en USD CON descuento
+    descuento_aplicado: Optional[float] = None  # Porcentaje de descuento aplicado al item
 
 
 class VentaRequest(BaseModel):
@@ -63,6 +66,7 @@ class VentaRequest(BaseModel):
     sucursal: str
     cajero: Optional[str] = None
     cliente: Optional[str] = None
+    porcentaje_descuento: Optional[float] = None  # Porcentaje de descuento aplicado a toda la venta
     notas: Optional[str] = None
 
 
@@ -77,5 +81,6 @@ class VentaResponse(BaseModel):
     sucursal: str
     cajero: Optional[str] = None
     cliente: Optional[str] = None
+    porcentaje_descuento: Optional[float] = None  # Porcentaje de descuento aplicado a toda la venta
     notas: Optional[str] = None
     _id: str
