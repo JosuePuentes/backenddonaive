@@ -5,13 +5,15 @@ from app.schemas.punto_venta import (
     TasaCambioResponse,
     ProductoItem,
     VentaRequest,
-    VentaResponse
+    VentaResponse,
+    MetodoPago
 )
 from bson import ObjectId
 from bson.errors import InvalidId
 from typing import List, Optional
 from datetime import datetime
 import re
+import pytz
 
 router = APIRouter()
 
@@ -206,6 +208,278 @@ def verificar_permiso(usuario: dict, permiso: str):
             status_code=403,
             detail=f"No tienes permisos para realizar esta acción. Se requiere: {permiso}"
         )
+
+
+async def obtener_codigo_farmacia_desde_sucursal(sucursal_id: str) -> Optional[str]:
+    """
+    Obtiene el código de farmacia desde la sucursal.
+    Busca en SUCURSALES y FARMACIAS para encontrar un campo 'codigo' o derivar el código.
+    Retorna el código de farmacia (ej: "01", "02") o None si no se encuentra.
+    """
+    if not sucursal_id:
+        return None
+    
+    try:
+        # Intentar buscar en SUCURSALES
+        sucursales_collection = get_collection("SUCURSALES")
+        try:
+            sucursal_doc = await sucursales_collection.find_one({"_id": ObjectId(sucursal_id)})
+        except (InvalidId, ValueError):
+            try:
+                sucursal_doc = await sucursales_collection.find_one({"_id": sucursal_id})
+            except:
+                sucursal_doc = None
+        
+        if sucursal_doc:
+            # Buscar campo 'codigo' o 'codigoFarmacia'
+            codigo = sucursal_doc.get("codigo") or sucursal_doc.get("codigoFarmacia")
+            if codigo:
+                return str(codigo).zfill(2)  # Asegurar formato 01, 02, etc.
+        
+        # Intentar buscar en FARMACIAS
+        farmacias_collection = get_collection("FARMACIAS")
+        try:
+            farmacia_doc = await farmacias_collection.find_one({"_id": ObjectId(sucursal_id)})
+        except (InvalidId, ValueError):
+            try:
+                farmacia_doc = await farmacias_collection.find_one({"_id": sucursal_id})
+            except:
+                farmacia_doc = None
+        
+        if farmacia_doc:
+            codigo = farmacia_doc.get("codigo") or farmacia_doc.get("codigoFarmacia")
+            if codigo:
+                return str(codigo).zfill(2)
+        
+        # Si no se encuentra código, retornar None
+        return None
+        
+    except Exception as e:
+        print(f"[OBTENER-CODIGO-FARMACIA] Error: {str(e)}")
+        return None
+
+
+async def actualizar_cuadre_con_venta(
+    sucursal_id: str,
+    metodos_pago: List[MetodoPago],
+    total_bs: float,
+    total_usd: Optional[float],
+    tasa_dia: float
+):
+    """
+    Actualiza o crea un cuadre con estado "wait" para la sucursal, sumando el total de la venta.
+    
+    Parámetros:
+    - sucursal_id: ID de la sucursal
+    - metodos_pago: Lista de métodos de pago de la venta
+    - total_bs: Total de la venta en Bs
+    - total_usd: Total de la venta en USD (opcional)
+    - tasa_dia: Tasa de cambio del día
+    
+    Mapeo de métodos de pago:
+    - efectivo USD -> efectivoUsd
+    - efectivo Bs -> efectivoBs
+    - zelle USD -> zelleUsd
+    - transferencia Bs -> pagomovilBs
+    - tarjeta Bs o USD -> puntosVenta[0].puntoDebito (convertir USD a Bs si es necesario)
+    """
+    try:
+        print(f"[ACTUALIZAR-CUADRE] Iniciando actualización de cuadre para sucursal: {sucursal_id}")
+        
+        # Obtener código de farmacia
+        codigo_farmacia = await obtener_codigo_farmacia_desde_sucursal(sucursal_id)
+        
+        # Obtener fecha actual (Venezuela)
+        venezuela_tz = pytz.timezone("America/Caracas")
+        now_ve = datetime.now(venezuela_tz)
+        fecha_actual = now_ve.strftime("%Y-%m-%d")
+        
+        # Si no se encontró código de farmacia, buscar en todas las colecciones CUADRES-*
+        if not codigo_farmacia:
+            print(f"[ACTUALIZAR-CUADRE] No se encontró código de farmacia, buscando en todas las colecciones")
+            # Buscar en todas las colecciones CUADRES-* (01-07)
+            colecciones_posibles = [f"CUADRES-0{i}" for i in range(1, 8)]
+            for codigo in colecciones_posibles:
+                try:
+                    collection = db[codigo]
+                    # Buscar cuadre del día
+                    cuadre_existente = await collection.find_one({"dia": fecha_actual})
+                    if cuadre_existente:
+                        codigo_farmacia = codigo.replace("CUADRES-", "")
+                        print(f"[ACTUALIZAR-CUADRE] Encontrado cuadre en colección {codigo}")
+                        break
+                except:
+                    continue
+        
+        # Si aún no hay código, usar "01" por defecto o crear en la primera colección disponible
+        if not codigo_farmacia:
+            codigo_farmacia = "01"
+            print(f"[ACTUALIZAR-CUADRE] Usando código de farmacia por defecto: {codigo_farmacia}")
+        
+        nombre_coleccion = f"CUADRES-{codigo_farmacia}"
+        collection = db[nombre_coleccion]
+        
+        # Buscar cuadre del día
+        cuadre_existente = await collection.find_one({"dia": fecha_actual})
+        
+        # Preparar incrementos según métodos de pago
+        incrementos = {
+            "efectivoUsd": 0.0,
+            "efectivoBs": 0.0,
+            "zelleUsd": 0.0,
+            "pagomovilBs": 0.0,
+            "puntoDebito": 0.0,  # Para tarjetas
+            "puntoCredito": 0.0  # Para tarjetas (si aplica)
+        }
+        
+        # Mapear métodos de pago
+        for metodo in metodos_pago:
+            tipo = metodo.tipo.lower()
+            monto = metodo.monto
+            divisa = metodo.divisa.upper() if metodo.divisa else "BS"
+            
+            if tipo == "efectivo":
+                if divisa == "USD":
+                    incrementos["efectivoUsd"] += monto
+                else:  # Bs
+                    incrementos["efectivoBs"] += monto
+            elif tipo == "zelle":
+                if divisa == "USD":
+                    incrementos["zelleUsd"] += monto
+                elif divisa == "BS":
+                    # Zelle en Bs se convierte a USD usando la tasa
+                    incrementos["zelleUsd"] += monto / tasa_dia
+            elif tipo == "transferencia":
+                if divisa == "BS":
+                    incrementos["pagomovilBs"] += monto
+                elif divisa == "USD":
+                    # Transferencia en USD se convierte a Bs
+                    incrementos["pagomovilBs"] += monto * tasa_dia
+            elif tipo == "tarjeta":
+                if divisa == "BS":
+                    incrementos["puntoDebito"] += monto
+                elif divisa == "USD":
+                    # Tarjeta en USD se convierte a Bs
+                    incrementos["puntoDebito"] += monto * tasa_dia
+        
+        print(f"[ACTUALIZAR-CUADRE] Incrementos calculados: {incrementos}")
+        
+        # Preparar actualización
+        update_data = {
+            "$inc": {
+                "efectivoUsd": incrementos["efectivoUsd"],
+                "efectivoBs": incrementos["efectivoBs"],
+                "zelleUsd": incrementos["zelleUsd"],
+                "pagomovilBs": incrementos["pagomovilBs"]
+            }
+        }
+        
+        # Si hay tarjeta, actualizar puntosVenta
+        if incrementos["puntoDebito"] > 0 or incrementos["puntoCredito"] > 0:
+            if cuadre_existente:
+                puntos_venta = cuadre_existente.get("puntosVenta", [])
+                if puntos_venta and len(puntos_venta) > 0:
+                    # Actualizar el primer punto de venta
+                    punto_actual = puntos_venta[0]
+                    punto_debito_actual = punto_actual.get("puntoDebito", 0) or 0
+                    punto_credito_actual = punto_actual.get("puntoCredito", 0) or 0
+                    
+                    # Usar $set para actualizar el array
+                    update_data["$set"] = update_data.get("$set", {})
+                    update_data["$set"]["puntosVenta.0.puntoDebito"] = punto_debito_actual + incrementos["puntoDebito"]
+                    update_data["$set"]["puntosVenta.0.puntoCredito"] = punto_credito_actual + incrementos["puntoCredito"]
+                else:
+                    # Crear nuevo punto de venta
+                    update_data["$set"] = update_data.get("$set", {})
+                    update_data["$set"]["puntosVenta"] = [{
+                        "puntoDebito": incrementos["puntoDebito"],
+                        "puntoCredito": incrementos["puntoCredito"]
+                    }]
+            else:
+                # Si no existe cuadre, se creará con puntosVenta
+                pass
+        
+        if cuadre_existente:
+            # Actualizar cuadre existente
+            estado_actual = cuadre_existente.get("estado", "wait")
+            
+            # Si está en "verified" o "denied", mantener el estado
+            # Si está en "wait", mantener "wait"
+            if estado_actual not in ["verified", "denied", "wait"]:
+                estado_actual = "wait"
+            
+            # No cambiar el estado si ya está en "verified" o "denied"
+            if estado_actual in ["verified", "denied"]:
+                print(f"[ACTUALIZAR-CUADRE] Cuadre en estado '{estado_actual}', manteniendo estado y sumando montos")
+            else:
+                # Si está en "wait", asegurar que siga en "wait"
+                update_data["$set"] = update_data.get("$set", {})
+                update_data["$set"]["estado"] = "wait"
+            
+            # Actualizar totalCajaSistemaBs (suma de todos los montos en Bs)
+            total_caja_actual = cuadre_existente.get("totalCajaSistemaBs", 0) or 0
+            total_caja_nuevo = total_caja_actual + total_bs
+            update_data["$set"] = update_data.get("$set", {})
+            update_data["$set"]["totalCajaSistemaBs"] = total_caja_nuevo
+            
+            # Actualizar usando $inc y $set
+            result = await collection.update_one(
+                {"dia": fecha_actual},
+                update_data
+            )
+            
+            if result.modified_count == 0:
+                print(f"[ACTUALIZAR-CUADRE] Advertencia: No se modificó el cuadre (puede que los valores sean idénticos)")
+            else:
+                print(f"[ACTUALIZAR-CUADRE] Cuadre actualizado exitosamente. Estado: {estado_actual}")
+        else:
+            # Crear nuevo cuadre con estado "wait"
+            print(f"[ACTUALIZAR-CUADRE] Creando nuevo cuadre para fecha: {fecha_actual}")
+            
+            nuevo_cuadre = {
+                "dia": fecha_actual,
+                "cajaNumero": 1,  # Valor por defecto, puede ajustarse
+                "tasa": tasa_dia,
+                "turno": "mañana",  # Valor por defecto
+                "cajero": "",  # Se puede obtener del usuario
+                "cajeroId": None,
+                "totalCajaSistemaBs": total_bs,
+                "devolucionesBs": 0.0,
+                "recargaBs": 0.0,
+                "pagomovilBs": incrementos["pagomovilBs"],
+                "puntosVenta": [{
+                    "puntoDebito": incrementos["puntoDebito"],
+                    "puntoCredito": incrementos["puntoCredito"]
+                }] if (incrementos["puntoDebito"] > 0 or incrementos["puntoCredito"] > 0) else [],
+                "efectivoBs": incrementos["efectivoBs"],
+                "totalBs": incrementos["efectivoBs"] + incrementos["pagomovilBs"] + incrementos["puntoDebito"],
+                "totalBsEnUsd": (incrementos["efectivoBs"] + incrementos["pagomovilBs"] + incrementos["puntoDebito"]) / tasa_dia if tasa_dia > 0 else 0,
+                "efectivoUsd": incrementos["efectivoUsd"],
+                "zelleUsd": incrementos["zelleUsd"],
+                "totalGeneralUsd": incrementos["efectivoUsd"] + incrementos["zelleUsd"],
+                "diferenciaUsd": 0.0,
+                "sobranteUsd": 0.0,
+                "faltanteUsd": 0.0,
+                "delete": False,
+                "estado": "wait",
+                "nombreFarmacia": None,
+                "costoInventario": 0.0,
+                "fecha": fecha_actual,
+                "hora": now_ve.strftime("%H:%M:%S"),
+                "valesUsd": 0.0,
+                "imagenesCuadre": []
+            }
+            
+            result = await collection.insert_one(nuevo_cuadre)
+            print(f"[ACTUALIZAR-CUADRE] Nuevo cuadre creado con ID: {result.inserted_id}")
+        
+        print(f"[ACTUALIZAR-CUADRE] Cuadre actualizado/creado exitosamente")
+        
+    except Exception as e:
+        # No fallar la venta si hay error al actualizar el cuadre
+        print(f"[ACTUALIZAR-CUADRE] ERROR al actualizar cuadre: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
 
 
 @router.get("/tasa-del-dia", response_model=TasaCambioResponse)
@@ -955,6 +1229,21 @@ async def registrar_venta(
                 print(f"[REGISTRAR-VENTA] Error al actualizar stock del item {item_venta.codigo}: {str(e)}")
                 import traceback
                 print(traceback.format_exc())
+        
+        # Actualizar cuadre con la venta (después de registrar la venta exitosamente)
+        try:
+            await actualizar_cuadre_con_venta(
+                sucursal_id=venta.sucursal,
+                metodos_pago=venta.metodos_pago,
+                total_bs=venta.total_bs,
+                total_usd=venta.total_usd,
+                tasa_dia=venta.tasa_dia
+            )
+        except Exception as e:
+            # No fallar la venta si hay error al actualizar el cuadre
+            print(f"[REGISTRAR-VENTA] Advertencia: Error al actualizar cuadre: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
         
         # Retornar respuesta
         venta_doc["_id"] = str(result.inserted_id)
