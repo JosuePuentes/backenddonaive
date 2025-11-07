@@ -942,11 +942,34 @@ async def registrar_venta(
             )
         
         # Validar que la suma de métodos de pago coincida con el total
-        suma_metodos = sum(mp.monto for mp in venta.metodos_pago)
-        if abs(suma_metodos - venta.total_bs) > 0.01:  # Tolerancia para decimales
+        # IMPORTANTE: Convertir todos los montos a USD para comparar
+        suma_metodos_usd = 0.0
+        for mp in venta.metodos_pago:
+            monto = mp.monto
+            divisa = mp.divisa.upper() if mp.divisa else "BS"
+            
+            # Convertir a USD si es necesario
+            if divisa == "USD":
+                suma_metodos_usd += monto
+            else:  # Bs -> convertir a USD
+                suma_metodos_usd += monto / venta.tasa_dia if venta.tasa_dia > 0 else 0
+        
+        # Convertir total_bs a USD para comparar
+        total_usd_calculado = venta.total_bs / venta.tasa_dia if venta.tasa_dia > 0 else 0
+        
+        # Log para debugging
+        print(f"[REGISTRAR-VENTA] Validación de métodos de pago:")
+        print(f"  - Total Bs: {venta.total_bs}")
+        print(f"  - Total USD (calculado): {total_usd_calculado}")
+        print(f"  - Suma métodos de pago (USD): {suma_metodos_usd}")
+        print(f"  - Tasa del día: {venta.tasa_dia}")
+        for mp in venta.metodos_pago:
+            print(f"  - Método: {mp.tipo}, Monto: {mp.monto}, Divisa: {mp.divisa}")
+        
+        if abs(suma_metodos_usd - total_usd_calculado) > 0.01:  # Tolerancia para decimales
             raise HTTPException(
                 status_code=400,
-                detail=f"La suma de métodos de pago ({suma_metodos}) no coincide con el total ({venta.total_bs})"
+                detail=f"La suma de métodos de pago (${suma_metodos_usd:.2f} USD) no coincide con el total (${total_usd_calculado:.2f} USD). Verifica que los montos y divisas sean correctos."
             )
         
         # Validar stock de productos
