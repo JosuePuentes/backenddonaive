@@ -261,6 +261,123 @@ async def obtener_cliente(
         )
 
 
+@router.put("/clientes/{cliente_id}", response_model=ClienteResponse)
+@router.patch("/clientes/{cliente_id}", response_model=ClienteResponse)
+async def actualizar_cliente(
+    cliente_id: str,
+    cliente_data: ClienteCreate,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Actualizar un cliente existente.
+    Requiere autenticación.
+    """
+    try:
+        clientes_collection = get_collection("CLIENTES")
+        
+        # Intentar convertir a ObjectId
+        try:
+            oid = ObjectId(cliente_id)
+        except InvalidId:
+            raise HTTPException(
+                status_code=400,
+                detail="ID de cliente inválido"
+            )
+        
+        # Verificar que el cliente existe
+        cliente_existente = await clientes_collection.find_one({"_id": oid})
+        if not cliente_existente:
+            raise HTTPException(
+                status_code=404,
+                detail="Cliente no encontrado"
+            )
+        
+        # Validar que la cédula no esté duplicada (si se está cambiando)
+        cedula = cliente_data.cedula.strip()
+        if cedula and cedula != cliente_existente.get("cedula"):
+            cliente_con_cedula = await clientes_collection.find_one({
+                "cedula": cedula,
+                "_id": {"$ne": oid}  # Excluir el cliente actual
+            })
+            if cliente_con_cedula:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Ya existe otro cliente con la cédula {cedula}"
+                )
+        
+        # Validar formato de email si se proporciona
+        if cliente_data.email:
+            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            if not re.match(email_pattern, cliente_data.email):
+                raise HTTPException(
+                    status_code=400,
+                    detail="El formato del email no es válido"
+                )
+        
+        # Validar formato de fecha de nacimiento si se proporciona
+        fecha_nacimiento = None
+        if cliente_data.fecha_nacimiento:
+            try:
+                fecha_nacimiento = datetime.strptime(cliente_data.fecha_nacimiento, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El formato de la fecha de nacimiento debe ser YYYY-MM-DD"
+                )
+        
+        # Preparar datos de actualización
+        update_data = {
+            "cedula": cedula if cedula else cliente_existente.get("cedula"),
+            "nombre": cliente_data.nombre.strip() if cliente_data.nombre else cliente_existente.get("nombre"),
+            "telefono": cliente_data.telefono.strip() if cliente_data.telefono else cliente_existente.get("telefono"),
+            "email": cliente_data.email.strip().lower() if cliente_data.email else cliente_existente.get("email"),
+            "direccion": cliente_data.direccion.strip() if cliente_data.direccion else cliente_existente.get("direccion"),
+            "fecha_nacimiento": cliente_data.fecha_nacimiento if cliente_data.fecha_nacimiento else cliente_existente.get("fecha_nacimiento"),
+            "notas": cliente_data.notas.strip() if cliente_data.notas else cliente_existente.get("notas"),
+            "fecha_actualizacion": datetime.utcnow()
+        }
+        
+        # Actualizar cliente
+        result = await clientes_collection.update_one(
+            {"_id": oid},
+            {"$set": update_data}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="Cliente no encontrado"
+            )
+        
+        # Obtener cliente actualizado
+        cliente_actualizado = await clientes_collection.find_one({"_id": oid})
+        
+        # Formatear respuesta
+        cliente_actualizado["_id"] = str(cliente_actualizado["_id"])
+        if cliente_actualizado.get("fecha_creacion"):
+            if isinstance(cliente_actualizado["fecha_creacion"], datetime):
+                cliente_actualizado["fecha_creacion"] = cliente_actualizado["fecha_creacion"].strftime("%Y-%m-%d %H:%M:%S")
+        if cliente_actualizado.get("fecha_actualizacion"):
+            if isinstance(cliente_actualizado["fecha_actualizacion"], datetime):
+                cliente_actualizado["fecha_actualizacion"] = cliente_actualizado["fecha_actualizacion"].strftime("%Y-%m-%d %H:%M:%S")
+        if cliente_actualizado.get("fecha_nacimiento"):
+            if isinstance(cliente_actualizado["fecha_nacimiento"], datetime):
+                cliente_actualizado["fecha_nacimiento"] = cliente_actualizado["fecha_nacimiento"].strftime("%Y-%m-%d")
+        
+        return ClienteResponse(**cliente_actualizado)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ACTUALIZAR-CLIENTE] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al actualizar cliente: {str(e)}"
+        )
+
+
 @router.get("/clientes/{cliente_id}/compras/total", response_model=ComprasTotalResponse)
 async def obtener_total_compras_cliente(
     cliente_id: str,
