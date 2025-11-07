@@ -11,6 +11,50 @@ import re
 router = APIRouter()
 
 
+@router.get("/clientes", response_model=List[ClienteResponse])
+async def listar_clientes(
+    skip: int = Query(0, ge=0, description="Número de registros a saltar"),
+    limit: int = Query(50, ge=1, le=100, description="Número máximo de registros a devolver"),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Listar todos los clientes con paginación.
+    Requiere autenticación.
+    """
+    try:
+        clientes_collection = get_collection("CLIENTES")
+        
+        # Obtener clientes con paginación
+        clientes = await clientes_collection.find({}).skip(skip).limit(limit).sort("fecha_creacion", -1).to_list(length=limit)
+        
+        # Formatear resultados
+        resultado = []
+        for cliente in clientes:
+            cliente["_id"] = str(cliente["_id"])
+            if cliente.get("fecha_creacion"):
+                if isinstance(cliente["fecha_creacion"], datetime):
+                    cliente["fecha_creacion"] = cliente["fecha_creacion"].strftime("%Y-%m-%d %H:%M:%S")
+            if cliente.get("fecha_actualizacion"):
+                if isinstance(cliente["fecha_actualizacion"], datetime):
+                    cliente["fecha_actualizacion"] = cliente["fecha_actualizacion"].strftime("%Y-%m-%d %H:%M:%S")
+            if cliente.get("fecha_nacimiento"):
+                if isinstance(cliente["fecha_nacimiento"], datetime):
+                    cliente["fecha_nacimiento"] = cliente["fecha_nacimiento"].strftime("%Y-%m-%d")
+            
+            resultado.append(ClienteResponse(**cliente))
+        
+        return resultado
+        
+    except Exception as e:
+        print(f"[LISTAR-CLIENTES] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al listar clientes: {str(e)}"
+        )
+
+
 @router.post("/clientes", response_model=ClienteResponse, status_code=201)
 async def crear_cliente(
     cliente: ClienteCreate,
