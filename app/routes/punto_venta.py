@@ -1393,3 +1393,129 @@ async def obtener_ventas_del_dia(
             status_code=500,
             detail=f"Error al obtener ventas del día: {str(e)}"
         )
+
+
+@router.get("/ventas/usuario", response_model=List[VentaResponse])
+async def obtener_ventas_usuario(
+    cajero: Optional[str] = Query(None, description="Correo o ID del cajero"),
+    sucursal: Optional[str] = Query(None, description="ID de la sucursal"),
+    fecha_inicio: Optional[str] = Query(None, description="Fecha de inicio en formato YYYY-MM-DD"),
+    fecha_fin: Optional[str] = Query(None, description="Fecha de fin en formato YYYY-MM-DD"),
+    limit: int = Query(50, ge=1, le=1000, description="Número máximo de registros a devolver"),
+    offset: int = Query(0, ge=0, description="Número de registros a saltar (para paginación)"),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Obtiene las ventas (facturas procesadas) con filtros opcionales.
+    Permite filtrar por cajero, sucursal y rango de fechas.
+    Requiere autenticación.
+    
+    Retorna una lista de ventas ordenadas por fecha_hora (más recientes primero).
+    """
+    try:
+        # Obtener colección de ventas
+        ventas_collection = get_collection("VENTAS")
+        
+        # Construir filtro
+        filtro = {}
+        condiciones_and = []
+        
+        # Filtrar por cajero
+        if cajero:
+            # Buscar por campo 'cajero' o 'usuario_registro'
+            condiciones_and.append({
+                "$or": [
+                    {"cajero": cajero},
+                    {"usuario_registro": cajero}
+                ]
+            })
+        
+        # Filtrar por sucursal
+        if sucursal:
+            filtro["sucursal"] = sucursal
+        
+        # Filtrar por rango de fechas
+        if fecha_inicio and fecha_fin:
+            # Validar formato de fechas
+            try:
+                datetime.strptime(fecha_inicio, "%Y-%m-%d")
+                datetime.strptime(fecha_fin, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Formato de fecha inválido. Use YYYY-MM-DD"
+                )
+            
+            # Filtrar por campo 'fecha' o 'fecha_hora'
+            condiciones_and.append({
+                "$or": [
+                    {"fecha": {"$gte": fecha_inicio, "$lte": fecha_fin}},
+                    {"fecha_hora": {"$gte": fecha_inicio, "$lte": fecha_fin + "T23:59:59"}}
+                ]
+            })
+        elif fecha_inicio:
+            # Solo fecha de inicio
+            try:
+                datetime.strptime(fecha_inicio, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Formato de fecha inválido. Use YYYY-MM-DD"
+                )
+            condiciones_and.append({
+                "$or": [
+                    {"fecha": {"$gte": fecha_inicio}},
+                    {"fecha_hora": {"$gte": fecha_inicio}}
+                ]
+            })
+        elif fecha_fin:
+            # Solo fecha de fin
+            try:
+                datetime.strptime(fecha_fin, "%Y-%m-%d")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Formato de fecha inválido. Use YYYY-MM-DD"
+                )
+            condiciones_and.append({
+                "$or": [
+                    {"fecha": {"$lte": fecha_fin}},
+                    {"fecha_hora": {"$lte": fecha_fin + "T23:59:59"}}
+                ]
+            })
+        
+        # Combinar todas las condiciones con $and si hay múltiples
+        if condiciones_and:
+            if len(condiciones_and) == 1:
+                # Si solo hay una condición $or, combinarla con el filtro base
+                filtro.update(condiciones_and[0])
+            else:
+                # Si hay múltiples condiciones, usar $and
+                filtro["$and"] = condiciones_and
+        
+        # Buscar ventas con paginación
+        ventas = await ventas_collection.find(filtro).sort("fecha_hora", -1).skip(offset).limit(limit).to_list(length=limit)
+        
+        # Formatear resultados
+        resultado = []
+        for venta in ventas:
+            venta["_id"] = str(venta["_id"])
+            # Asegurar que todos los campos estén presentes
+            resultado.append(VentaResponse(**venta))
+        
+        print(f"[OBTENER-VENTAS-USUARIO] Encontradas {len(resultado)} ventas")
+        print(f"  - Filtros: cajero={cajero}, sucursal={sucursal}, fecha_inicio={fecha_inicio}, fecha_fin={fecha_fin}")
+        print(f"  - Paginación: offset={offset}, limit={limit}")
+        
+        return resultado
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[OBTENER-VENTAS-USUARIO] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener ventas del usuario: {str(e)}"
+        )
