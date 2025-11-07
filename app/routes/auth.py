@@ -78,6 +78,15 @@ class Inventario(BaseModel):
     estado: str = "activo"  # Nuevo campo con valor por defecto
 
 
+class Lote(BaseModel):
+    """Modelo para un lote de un item"""
+    numero_lote: Optional[str] = None
+    fecha_vencimiento: Optional[str] = None
+    cantidad: Optional[int] = None
+    costo_unitario: Optional[float] = None
+    precio_unitario: Optional[float] = None
+
+
 class ItemInventarioUpdate(BaseModel):
     """Modelo para actualizar un item de inventario"""
     nombre: Optional[str] = None
@@ -87,6 +96,7 @@ class ItemInventarioUpdate(BaseModel):
     costo_unitario: Optional[float] = None
     descripcion: Optional[str] = None
     utilidad_contable: Optional[float] = None  # Se calculará automáticamente si no se proporciona
+    lotes: Optional[List[Lote]] = None  # Array de lotes
 
 
 class ItemInventarioResponse(BaseModel):
@@ -101,6 +111,7 @@ class ItemInventarioResponse(BaseModel):
     precio_unitario: Optional[float] = None
     cantidad: Optional[int] = None
     utilidad_contable: Optional[float] = None
+    lotes: Optional[List[dict]] = None  # Array de lotes
     _id: Optional[str] = None
     
     class Config:
@@ -1364,6 +1375,7 @@ async def obtener_items_inventario(
                 "precio_unitario": item_dict.get("precio_unitario") or item_dict.get("precio"),
                 "cantidad": item_dict.get("cantidad"),
                 "utilidad_contable": item_dict.get("utilidad_contable"),
+                "lotes": item_dict.get("lotes", []),  # Devolver lotes si existen
                 "_id": str(item_id_val) if item_id_val else (str(item_codigo) if item_codigo else None),
                 "item_id": str(item_id_val) if item_id_val else (str(item_codigo) if item_codigo else None)
             }
@@ -1789,6 +1801,16 @@ async def modificar_item_inventario(
         if data.descripcion is not None:
             print(f"[MODIFICAR-ITEM] descripcion: {data.descripcion}")
             update_data["descripcion"] = data.descripcion
+        
+        # CRÍTICO: Actualizar lotes si se proporcionan
+        if data.lotes is not None:
+            print(f"[MODIFICAR-ITEM] lotes recibidos: {len(data.lotes) if data.lotes else 0} lotes")
+            # Convertir los lotes a diccionarios para guardar en MongoDB
+            lotes_dict = [lote.dict() if hasattr(lote, 'dict') else lote for lote in data.lotes]
+            update_data["lotes"] = lotes_dict
+            print(f"[MODIFICAR-ITEM] lotes agregados a update_data: {lotes_dict}")
+        else:
+            print(f"[MODIFICAR-ITEM] lotes es None - no se actualizará este campo")
         
         print(f"[MODIFICAR-ITEM] update_data después de validar campos: {update_data}")
         
