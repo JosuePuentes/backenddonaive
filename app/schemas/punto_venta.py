@@ -9,13 +9,22 @@ class TasaCambioResponse(BaseModel):
     divisa: str = "Bs/USD"
 
 
+class LoteProducto(BaseModel):
+    """Modelo para un lote en la respuesta de productos"""
+    lote: Optional[str] = None  # numero_lote
+    fecha_vencimiento: Optional[str] = None
+    cantidad: Optional[int] = None
+
+
 class ProductoItem(BaseModel):
     id: str
     nombre: str
     codigo: Optional[str] = None
     precio: float
     precio_usd: Optional[float] = None
-    stock: int
+    stock: int  # Alias para compatibilidad
+    cantidad: Optional[int] = None  # Stock total (suma de lotes si existen)
+    lotes: Optional[List[LoteProducto]] = []  # Array de lotes
     sucursal: Optional[str] = None
 
 

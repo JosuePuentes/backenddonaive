@@ -163,11 +163,15 @@ async def obtener_productos(
                 detail="Use el endpoint /productos/buscar para búsquedas específicas o pase todos=true para obtener todos los productos"
             )
         
+        # Obtener colección de inventarios para buscar lotes
+        inventarios_collection = get_collection("INVENTARIOS")
+        
         # Transformar resultados
         resultado = []
         for producto in productos:
             stock = producto.get("stock", 0)
             precio = producto.get("precio", producto.get("costo", 0))
+            codigo_producto = producto.get("codigo")
             
             # Obtener stock de la sucursal específica
             if sucursal:
@@ -180,13 +184,56 @@ async def obtener_productos(
                             stock = item.get("stock", stock)
                             break
             
+            # CRÍTICO: Buscar lotes en inventarios de la sucursal
+            lotes_encontrados = []
+            cantidad_total_lotes = 0
+            
+            if codigo_producto and sucursal:
+                try:
+                    # Buscar inventarios activos de la sucursal que contengan items con este código
+                    inventarios = await inventarios_collection.find({
+                        "sucursal": sucursal,
+                        "estado": "activo"
+                    }).to_list(length=50)  # Limitar a 50 inventarios recientes
+                    
+                    # Buscar items con este código en los inventarios
+                    for inventario in inventarios:
+                        items = inventario.get("items", [])
+                        for item in items:
+                            item_codigo = item.get("codigo")
+                            # Comparar códigos (pueden ser string o número)
+                            if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                                # Encontrar lotes en este item
+                                item_lotes = item.get("lotes", [])
+                                if item_lotes:
+                                    for lote in item_lotes:
+                                        # Formatear lote para la respuesta
+                                        lote_formateado = {
+                                            "lote": lote.get("numero_lote") or lote.get("lote"),
+                                            "fecha_vencimiento": lote.get("fecha_vencimiento"),
+                                            "cantidad": lote.get("cantidad", 0) or 0
+                                        }
+                                        # Solo agregar si tiene lote o cantidad
+                                        if lote_formateado["lote"] or lote_formateado["cantidad"] > 0:
+                                            lotes_encontrados.append(lote_formateado)
+                                            cantidad_total_lotes += lote_formateado["cantidad"]
+                                break  # Ya encontramos el item, no buscar más en este inventario
+                except Exception as e:
+                    print(f"[OBTENER-PRODUCTOS] Error al buscar lotes: {str(e)}")
+                    # Continuar sin lotes si hay error
+            
+            # Calcular cantidad total: usar suma de lotes si existen, sino usar stock
+            cantidad_final = cantidad_total_lotes if lotes_encontrados else int(stock)
+            
             resultado.append(ProductoItem(
                 id=str(producto["_id"]),
                 nombre=producto.get("nombre", producto.get("farmacia", "Sin nombre")),
-                codigo=producto.get("codigo"),
+                codigo=codigo_producto,
                 precio=float(precio),
                 precio_usd=None,
-                stock=int(stock),
+                stock=int(stock),  # Mantener para compatibilidad
+                cantidad=cantidad_final,  # Stock total (suma de lotes si existen)
+                lotes=lotes_encontrados if lotes_encontrados else [],  # Array de lotes
                 sucursal=sucursal or producto.get("sucursal")
             ))
         
@@ -257,12 +304,16 @@ async def buscar_productos(
         # Buscar productos (limitado a 20 resultados para rendimiento)
         productos = await productos_collection.find(query).limit(20).to_list(length=20)
         
+        # Obtener colección de inventarios para buscar lotes
+        inventarios_collection = get_collection("INVENTARIOS")
+        
         # Transformar resultados
         resultado = []
         for producto in productos:
             # Obtener stock actual de la sucursal
             stock = producto.get("stock", 0)
             precio = producto.get("precio", producto.get("costo", 0))
+            codigo_producto = producto.get("codigo")
             
             # Si hay sucursal específica, buscar stock por sucursal
             if sucursal:
@@ -275,13 +326,56 @@ async def buscar_productos(
                             stock = item.get("stock", stock)
                             break
             
+            # CRÍTICO: Buscar lotes en inventarios de la sucursal
+            lotes_encontrados = []
+            cantidad_total_lotes = 0
+            
+            if codigo_producto and sucursal:
+                try:
+                    # Buscar inventarios activos de la sucursal que contengan items con este código
+                    inventarios = await inventarios_collection.find({
+                        "sucursal": sucursal,
+                        "estado": "activo"
+                    }).to_list(length=50)  # Limitar a 50 inventarios recientes
+                    
+                    # Buscar items con este código en los inventarios
+                    for inventario in inventarios:
+                        items = inventario.get("items", [])
+                        for item in items:
+                            item_codigo = item.get("codigo")
+                            # Comparar códigos (pueden ser string o número)
+                            if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                                # Encontrar lotes en este item
+                                item_lotes = item.get("lotes", [])
+                                if item_lotes:
+                                    for lote in item_lotes:
+                                        # Formatear lote para la respuesta
+                                        lote_formateado = {
+                                            "lote": lote.get("numero_lote") or lote.get("lote"),
+                                            "fecha_vencimiento": lote.get("fecha_vencimiento"),
+                                            "cantidad": lote.get("cantidad", 0) or 0
+                                        }
+                                        # Solo agregar si tiene lote o cantidad
+                                        if lote_formateado["lote"] or lote_formateado["cantidad"] > 0:
+                                            lotes_encontrados.append(lote_formateado)
+                                            cantidad_total_lotes += lote_formateado["cantidad"]
+                                break  # Ya encontramos el item, no buscar más en este inventario
+                except Exception as e:
+                    print(f"[BUSCAR-PRODUCTOS] Error al buscar lotes: {str(e)}")
+                    # Continuar sin lotes si hay error
+            
+            # Calcular cantidad total: usar suma de lotes si existen, sino usar stock
+            cantidad_final = cantidad_total_lotes if lotes_encontrados else int(stock)
+            
             resultado.append(ProductoItem(
                 id=str(producto["_id"]),
                 nombre=producto.get("nombre", producto.get("farmacia", "Sin nombre")),
-                codigo=producto.get("codigo"),
+                codigo=codigo_producto,
                 precio=float(precio),
                 precio_usd=None,  # Se calculará en el frontend
-                stock=int(stock),
+                stock=int(stock),  # Mantener para compatibilidad
+                cantidad=cantidad_final,  # Stock total (suma de lotes si existen)
+                lotes=lotes_encontrados if lotes_encontrados else [],  # Array de lotes
                 sucursal=sucursal or producto.get("sucursal")
             ))
         
