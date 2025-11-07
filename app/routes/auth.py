@@ -1792,7 +1792,7 @@ async def modificar_item_inventario(
         
         print(f"[MODIFICAR-ITEM] update_data después de validar campos: {update_data}")
         
-        # Obtener valores actuales o nuevos para calcular utilidad
+        # Obtener valores actuales o nuevos para calcular campos derivados
         cantidad = update_data.get("cantidad", item_actual.get("cantidad", 0))
         precio_unitario = update_data.get("precio_unitario", item_actual.get("precio_unitario", item_actual.get("precio", 0)))
         costo_unitario = update_data.get("costo_unitario", item_actual.get("costo_unitario", item_actual.get("costo", 0)))
@@ -1806,17 +1806,52 @@ async def modificar_item_inventario(
         
         print(f"[MODIFICAR-ITEM] Valores para cálculo: cantidad={cantidad}, precio_unitario={precio_unitario}, costo_unitario={costo_unitario}")
         
+        # CRÍTICO: Recalcular campos derivados (costo, precio, utilidad_contable) si cambió cantidad, precio_unitario o costo_unitario
+        # Esto asegura que los campos calculados siempre estén actualizados
+        campos_calculados_necesarios = False
+        if "cantidad" in update_data or "precio_unitario" in update_data or "costo_unitario" in update_data:
+            campos_calculados_necesarios = True
+            print(f"[MODIFICAR-ITEM] Se actualizaron campos que afectan cálculos, recalculando campos derivados")
+        
+        # Calcular costo total del item (costo_unitario * cantidad)
+        if campos_calculados_necesarios:
+            costo_item = costo_unitario * cantidad
+            update_data["costo"] = costo_item
+            print(f"[MODIFICAR-ITEM] Costo del item calculado: {costo_item} = {costo_unitario} × {cantidad}")
+        
+        # Calcular precio total del item (precio_unitario * cantidad)
+        if campos_calculados_necesarios:
+            precio_item = precio_unitario * cantidad
+            update_data["precio"] = precio_item
+            print(f"[MODIFICAR-ITEM] Precio del item calculado: {precio_item} = {precio_unitario} × {cantidad}")
+        
         # Calcular utilidad contable
         # Utilidad contable = (precio_unitario - costo_unitario) * cantidad
-        if precio_unitario > 0 and costo_unitario > 0 and cantidad > 0:
-            utilidad_contable = (precio_unitario - costo_unitario) * cantidad
-            update_data["utilidad_contable"] = utilidad_contable
-            print(f"[MODIFICAR-ITEM] Utilidad contable calculada: {utilidad_contable} = ({precio_unitario} - {costo_unitario}) * {cantidad}")
+        if campos_calculados_necesarios:
+            if precio_unitario > 0 and costo_unitario > 0 and cantidad >= 0:
+                utilidad_contable = (precio_unitario - costo_unitario) * cantidad
+                update_data["utilidad_contable"] = utilidad_contable
+                print(f"[MODIFICAR-ITEM] Utilidad contable calculada: {utilidad_contable} = ({precio_unitario} - {costo_unitario}) × {cantidad}")
+            else:
+                update_data["utilidad_contable"] = 0.0
+                print(f"[MODIFICAR-ITEM] Utilidad contable = 0 (valores no válidos para cálculo)")
         
         # Si se proporciona utilidad_contable manualmente, usarla (sobrescribe el cálculo)
         if data.utilidad_contable is not None:
             update_data["utilidad_contable"] = data.utilidad_contable
             print(f"[MODIFICAR-ITEM] Utilidad contable proporcionada manualmente: {data.utilidad_contable}")
+        
+        # CRÍTICO: Preservar campos importantes que no deben perderse
+        # Asegurar que item_id e inventario_id se preserven
+        if "item_id" not in update_data and item_actual.get("item_id"):
+            # No agregar a update_data porque no queremos actualizarlo, solo preservarlo
+            print(f"[MODIFICAR-ITEM] Preservando item_id: {item_actual.get('item_id')}")
+        
+        if "inventario_id" not in update_data and item_actual.get("inventario_id"):
+            # No agregar a update_data porque no queremos actualizarlo, solo preservarlo
+            print(f"[MODIFICAR-ITEM] Preservando inventario_id: {item_actual.get('inventario_id')}")
+        
+        print(f"[MODIFICAR-ITEM] update_data final antes de guardar: {update_data}")
         
         # Actualizar el item en el array
         print(f"[MODIFICAR-ITEM] Paso 5: Verificando si hay datos para actualizar")
@@ -1885,25 +1920,55 @@ async def modificar_item_inventario(
             print(f"[MODIFICAR-ITEM] Costo total calculado: {costo_total} (suma de cantidad × costo_unitario)")
             print(f"[MODIFICAR-ITEM] NOTA: Se usa costo_unitario, NO precio_unitario para el cálculo")
             
-            # Actualizar el costo total del inventario
+            # CRÍTICO: Calcular total de existencias (suma de todas las cantidades)
+            total_existencias = 0
+            for item in items_actualizados:
+                cantidad_item = item.get("cantidad", 0) or 0
+                total_existencias += cantidad_item
+            
+            print(f"[MODIFICAR-ITEM] Total existencias calculado: {total_existencias} (suma de todas las cantidades)")
+            
+            # Actualizar el costo total y total de existencias del inventario
             # IMPORTANTE: Guardar en campo "costo", NO "precio"
-            print(f"[MODIFICAR-ITEM] Paso 9: Actualizando costo total del inventario")
+            print(f"[MODIFICAR-ITEM] Paso 9: Actualizando costo total y total existencias del inventario")
             print(f"[MODIFICAR-ITEM] Guardando costo_total={costo_total} en campo 'costo' del inventario")
+            print(f"[MODIFICAR-ITEM] Guardando total_existencias={total_existencias} en campo 'total_items' o 'total_existencias'")
+            
+            # Actualizar ambos campos en una sola operación
+            update_inventario = {
+                "costo": costo_total,
+                "total_items": total_existencias  # Usar total_items para consistencia
+            }
+            
             result_costo = await collection.update_one(
                 {"_id": ObjectId(inventario_id)},
-                {"$set": {"costo": costo_total}}
+                {"$set": update_inventario}
             )
-            print(f"[MODIFICAR-ITEM] Costo total actualizado en MongoDB:")
+            print(f"[MODIFICAR-ITEM] Inventario actualizado en MongoDB:")
             print(f"[MODIFICAR-ITEM]   - matched_count: {result_costo.matched_count}")
             print(f"[MODIFICAR-ITEM]   - modified_count: {result_costo.modified_count}")
+            print(f"[MODIFICAR-ITEM]   - Campos actualizados: costo={costo_total}, total_items={total_existencias}")
             
             # Verificar que se guardó correctamente
             if result_costo.matched_count == 0:
-                print(f"[MODIFICAR-ITEM] ERROR: No se encontró el inventario para actualizar costo")
+                print(f"[MODIFICAR-ITEM] ERROR: No se encontró el inventario para actualizar")
+                raise HTTPException(status_code=500, detail="Error al actualizar el inventario")
             elif result_costo.modified_count > 0:
-                print(f"[MODIFICAR-ITEM] ✅ Costo total guardado exitosamente en MongoDB")
+                print(f"[MODIFICAR-ITEM] ✅ Inventario guardado exitosamente en MongoDB (costo y total_items)")
             else:
-                print(f"[MODIFICAR-ITEM] INFO: Costo total no cambió (ya tenía ese valor)")
+                print(f"[MODIFICAR-ITEM] INFO: Inventario no cambió (ya tenía esos valores)")
+            
+            # Verificar que los valores se guardaron correctamente
+            inventario_verificado = await collection.find_one({"_id": ObjectId(inventario_id)})
+            costo_guardado = inventario_verificado.get("costo", 0)
+            total_items_guardado = inventario_verificado.get("total_items", 0)
+            print(f"[MODIFICAR-ITEM] Verificación: costo en BD={costo_guardado}, total_items en BD={total_items_guardado}")
+            
+            if abs(costo_guardado - costo_total) > 0.01:
+                print(f"[MODIFICAR-ITEM] ADVERTENCIA: El costo guardado ({costo_guardado}) no coincide con el calculado ({costo_total})")
+            
+            if total_items_guardado != total_existencias:
+                print(f"[MODIFICAR-ITEM] ADVERTENCIA: El total_items guardado ({total_items_guardado}) no coincide con el calculado ({total_existencias})")
             
             # Obtener el item actualizado para retornarlo
             print(f"[MODIFICAR-ITEM] Paso 10: Obteniendo item actualizado para respuesta")
