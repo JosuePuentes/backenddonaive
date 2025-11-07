@@ -1739,24 +1739,53 @@ async def modificar_item_inventario(
             update_data["codigo"] = data.codigo
         if data.cantidad is not None:
             print(f"[MODIFICAR-ITEM] cantidad recibida: {data.cantidad} (tipo: {type(data.cantidad)})")
-            if data.cantidad < 0:
+            # Convertir a int si es necesario (puede venir como string o float)
+            try:
+                cantidad_valor = int(data.cantidad) if not isinstance(data.cantidad, int) else data.cantidad
+            except (ValueError, TypeError) as e:
+                print(f"[MODIFICAR-ITEM] ERROR: No se puede convertir cantidad a int: {data.cantidad}, error: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"La cantidad debe ser un número entero válido: {data.cantidad}")
+            
+            if cantidad_valor < 0:
                 print(f"[MODIFICAR-ITEM] ERROR: Cantidad negativa")
                 raise HTTPException(status_code=400, detail="La cantidad no puede ser negativa")
             # Permitir cantidad = 0 (puede ser válido para ajustes de inventario)
-            update_data["cantidad"] = data.cantidad
-            print(f"[MODIFICAR-ITEM] cantidad agregada a update_data: {update_data['cantidad']}")
+            update_data["cantidad"] = cantidad_valor
+            print(f"[MODIFICAR-ITEM] cantidad agregada a update_data: {update_data['cantidad']} (tipo final: {type(update_data['cantidad'])})")
+        else:
+            print(f"[MODIFICAR-ITEM] cantidad es None - no se actualizará este campo")
         if data.precio_unitario is not None:
-            print(f"[MODIFICAR-ITEM] precio_unitario: {data.precio_unitario}")
-            if data.precio_unitario < 0:
+            print(f"[MODIFICAR-ITEM] precio_unitario recibido: {data.precio_unitario} (tipo: {type(data.precio_unitario)})")
+            # Convertir a float si es necesario
+            try:
+                precio_valor = float(data.precio_unitario) if not isinstance(data.precio_unitario, (int, float)) else float(data.precio_unitario)
+            except (ValueError, TypeError) as e:
+                print(f"[MODIFICAR-ITEM] ERROR: No se puede convertir precio_unitario a float: {data.precio_unitario}, error: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"El precio unitario debe ser un número válido: {data.precio_unitario}")
+            
+            if precio_valor < 0:
                 print(f"[MODIFICAR-ITEM] ERROR: Precio unitario negativo")
                 raise HTTPException(status_code=400, detail="El precio unitario no puede ser negativo")
-            update_data["precio_unitario"] = data.precio_unitario
+            update_data["precio_unitario"] = precio_valor
+            print(f"[MODIFICAR-ITEM] precio_unitario agregado a update_data: {update_data['precio_unitario']} (tipo final: {type(update_data['precio_unitario'])})")
+        else:
+            print(f"[MODIFICAR-ITEM] precio_unitario es None - no se actualizará este campo")
         if data.costo_unitario is not None:
-            print(f"[MODIFICAR-ITEM] costo_unitario: {data.costo_unitario}")
-            if data.costo_unitario < 0:
+            print(f"[MODIFICAR-ITEM] costo_unitario recibido: {data.costo_unitario} (tipo: {type(data.costo_unitario)})")
+            # Convertir a float si es necesario
+            try:
+                costo_valor = float(data.costo_unitario) if not isinstance(data.costo_unitario, (int, float)) else float(data.costo_unitario)
+            except (ValueError, TypeError) as e:
+                print(f"[MODIFICAR-ITEM] ERROR: No se puede convertir costo_unitario a float: {data.costo_unitario}, error: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"El costo unitario debe ser un número válido: {data.costo_unitario}")
+            
+            if costo_valor < 0:
                 print(f"[MODIFICAR-ITEM] ERROR: Costo unitario negativo")
                 raise HTTPException(status_code=400, detail="El costo unitario no puede ser negativo")
-            update_data["costo_unitario"] = data.costo_unitario
+            update_data["costo_unitario"] = costo_valor
+            print(f"[MODIFICAR-ITEM] costo_unitario agregado a update_data: {update_data['costo_unitario']} (tipo final: {type(update_data['costo_unitario'])})")
+        else:
+            print(f"[MODIFICAR-ITEM] costo_unitario es None - no se actualizará este campo")
         if data.descripcion is not None:
             print(f"[MODIFICAR-ITEM] descripcion: {data.descripcion}")
             update_data["descripcion"] = data.descripcion
