@@ -176,35 +176,71 @@ async def login_user(data: LoginInput):
     Login de usuario.
     Devuelve el token y el usuario con permisos actualizados desde la base de datos.
     """
-    usuario, token = await login_y_token(data.correo, data.contraseña, return_user=True)
-    if not token or not usuario:
-        raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
-    
-    # Asegurar que los permisos vengan desde la BD (ya vienen, pero lo verificamos)
-    usuarios_collection = get_collection("USUARIOS")
-    usuario_actualizado = await usuarios_collection.find_one(
-        {"correo": data.correo},
-        {"contraseña": 0}  # Excluir contraseña
-    )
-    
-    if usuario_actualizado:
-        # Usar el usuario actualizado desde la BD para tener permisos frescos
-        usuario_actualizado["_id"] = str(usuario_actualizado["_id"])
+    try:
+        print(f"[LOGIN] Intento de login para correo: {data.correo}")
+        
+        # Intentar autenticar usuario
+        resultado = await login_y_token(data.correo, data.contraseña, return_user=True)
+        
+        # Verificar que el resultado no sea None
+        if resultado is None:
+            print(f"[LOGIN] ERROR: Credenciales incorrectas para {data.correo}")
+            raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+        
+        # Desempaquetar resultado
+        usuario, token = resultado
+        
+        if not token or not usuario:
+            print(f"[LOGIN] ERROR: Token o usuario vacío para {data.correo}")
+            raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+        
+        print(f"[LOGIN] Usuario autenticado: {data.correo}, token generado: {token[:20]}...")
+        
+        # Asegurar que los permisos vengan desde la BD (ya vienen, pero lo verificamos)
+        try:
+            usuarios_collection = get_collection("USUARIOS")
+            usuario_actualizado = await usuarios_collection.find_one(
+                {"correo": data.correo},
+                {"contraseña": 0}  # Excluir contraseña
+            )
+            
+            if usuario_actualizado:
+                # Usar el usuario actualizado desde la BD para tener permisos frescos
+                usuario_actualizado["_id"] = str(usuario_actualizado["_id"])
+                print(f"[LOGIN] Usuario actualizado encontrado, retornando respuesta")
+                return {
+                    "access_token": token,
+                    "token_type": "bearer",
+                    "usuario": usuario_actualizado
+                }
+        except Exception as e:
+            print(f"[LOGIN] Advertencia: Error al obtener usuario actualizado: {str(e)}")
+            # Continuar con el usuario original si hay error
+        
+        # Fallback al usuario original si no se encuentra actualizado
+        if "_id" in usuario:
+            usuario["_id"] = str(usuario["_id"])
+        # Remover contraseña si está presente
+        usuario.pop("contraseña", None)
+        
+        print(f"[LOGIN] Retornando respuesta con usuario original")
         return {
             "access_token": token,
             "token_type": "bearer",
-            "usuario": usuario_actualizado
+            "usuario": usuario
         }
-    
-    # Fallback al usuario original si no se encuentra actualizado
-    usuario["_id"] = str(usuario["_id"])
-    # Remover contraseña si está presente
-    usuario.pop("contraseña", None)
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "usuario": usuario
-    }
+        
+    except HTTPException:
+        # Re-lanzar HTTPException sin modificar
+        raise
+    except Exception as e:
+        print(f"[LOGIN] ERROR CRÍTICO: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error interno del servidor al procesar el login: {str(e)}"
+        )
 
 
 @router.get("/auth/me")
