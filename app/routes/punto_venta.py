@@ -16,6 +16,124 @@ import re
 router = APIRouter()
 
 
+async def obtener_stock_por_sucursal(codigo_producto: str) -> List[dict]:
+    """
+    Función helper para obtener el stock de un producto en todas las sucursales.
+    Busca el producto por código en todos los inventarios activos.
+    
+    Retorna una lista con el stock por cada sucursal, incluyendo sucursales con stock 0.
+    """
+    try:
+        inventarios_collection = get_collection("INVENTARIOS")
+        sucursales_collection = get_collection("SUCURSALES")
+        farmacias_collection = get_collection("FARMACIAS")
+        
+        # Obtener todas las sucursales para asegurar que todas estén en la respuesta
+        sucursales_dict = {}
+        try:
+            sucursales = await sucursales_collection.find({}).to_list(length=None)
+            for suc in sucursales:
+                suc_id = str(suc.get("_id", ""))
+                suc_nombre = suc.get("nombre") or suc.get("farmacia") or suc_id
+                sucursales_dict[suc_id] = suc_nombre
+        except Exception as e:
+            print(f"[OBTENER-STOCK] Error al obtener sucursales: {str(e)}")
+        
+        # Si no hay sucursales en SUCURSALES, intentar desde FARMACIAS
+        if not sucursales_dict:
+            try:
+                farmacias = await farmacias_collection.find({}).to_list(length=None)
+                for farm in farmacias:
+                    farm_id = str(farm.get("_id", ""))
+                    farm_nombre = farm.get("nombre") or farm.get("farmacia") or farm_id
+                    sucursales_dict[farm_id] = farm_nombre
+            except Exception as e:
+                print(f"[OBTENER-STOCK] Error al obtener farmacias: {str(e)}")
+        
+        # Inicializar stock por sucursal (todas con 0)
+        stock_por_sucursal = {}
+        for suc_id, suc_nombre in sucursales_dict.items():
+            stock_por_sucursal[suc_id] = {
+                "sucursal_id": suc_id,
+                "sucursal_nombre": suc_nombre,
+                "cantidad": 0,
+                "stock": 0
+            }
+        
+        # Buscar el producto en todos los inventarios activos
+        inventarios = await inventarios_collection.find({
+            "estado": "activo"
+        }).to_list(length=None)
+        
+        # Primero, agregar todas las sucursales que tienen inventarios activos
+        # (aunque no estén en la colección SUCURSALES)
+        for inventario in inventarios:
+            sucursal_id = inventario.get("sucursal")
+            if not sucursal_id:
+                continue
+            
+            sucursal_id_str = str(sucursal_id)
+            if sucursal_id_str not in stock_por_sucursal:
+                # Obtener nombre de la sucursal desde el inventario si está disponible
+                sucursal_nombre = inventario.get("sucursal_nombre") or inventario.get("farmacia") or sucursal_id_str
+                stock_por_sucursal[sucursal_id_str] = {
+                    "sucursal_id": sucursal_id_str,
+                    "sucursal_nombre": sucursal_nombre,
+                    "cantidad": 0,
+                    "stock": 0
+                }
+        
+        # Buscar items con este código en los inventarios
+        for inventario in inventarios:
+            sucursal_id = inventario.get("sucursal")
+            if not sucursal_id:
+                continue
+            
+            sucursal_id_str = str(sucursal_id)
+            items = inventario.get("items", []) or inventario.get("items_inventario", [])
+            
+            for item in items:
+                item_codigo = item.get("codigo")
+                # Comparar códigos (pueden ser string o número)
+                if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                    # Calcular stock de este item (suma de lotes si existen)
+                    cantidad_item = 0
+                    item_lotes = item.get("lotes", [])
+                    
+                    if item_lotes:
+                        # Sumar cantidades de lotes
+                        for lote in item_lotes:
+                            cantidad_lote = lote.get("cantidad", 0) or 0
+                            cantidad_item += cantidad_lote
+                    else:
+                        # Si no hay lotes, usar cantidad del item
+                        cantidad_item = item.get("cantidad", 0) or 0
+                    
+                    # Asegurar que la sucursal esté en el diccionario
+                    if sucursal_id_str not in stock_por_sucursal:
+                        sucursal_nombre = inventario.get("sucursal_nombre") or inventario.get("farmacia") or sucursal_id_str
+                        stock_por_sucursal[sucursal_id_str] = {
+                            "sucursal_id": sucursal_id_str,
+                            "sucursal_nombre": sucursal_nombre,
+                            "cantidad": 0,
+                            "stock": 0
+                        }
+                    
+                    # Sumar el stock de este item al total de la sucursal
+                    stock_por_sucursal[sucursal_id_str]["cantidad"] += cantidad_item
+                    stock_por_sucursal[sucursal_id_str]["stock"] += cantidad_item
+                    break  # Ya encontramos el item, no buscar más en este inventario
+        
+        # Convertir a lista y asegurar que todas las sucursales estén incluidas
+        resultado = list(stock_por_sucursal.values())
+        
+        return resultado
+        
+    except Exception as e:
+        print(f"[OBTENER-STOCK] Error al obtener stock por sucursal: {str(e)}")
+        return []
+
+
 def verificar_permiso(usuario: dict, permiso: str):
     """Verifica si el usuario tiene un permiso específico"""
     permisos = usuario.get("permisos", [])
@@ -208,9 +326,18 @@ async def obtener_productos(
                                 if item_lotes:
                                     for lote in item_lotes:
                                         # Formatear lote para la respuesta
+                                        fecha_vencimiento = lote.get("fecha_vencimiento")
+                                        # Formatear fecha si es datetime
+                                        if fecha_vencimiento:
+                                            if isinstance(fecha_vencimiento, datetime):
+                                                fecha_vencimiento = fecha_vencimiento.strftime("%Y-%m-%d")
+                                            elif isinstance(fecha_vencimiento, str):
+                                                # Ya está en formato string
+                                                pass
+                                        
                                         lote_formateado = {
                                             "lote": lote.get("numero_lote") or lote.get("lote"),
-                                            "fecha_vencimiento": lote.get("fecha_vencimiento"),
+                                            "fecha_vencimiento": fecha_vencimiento,
                                             "cantidad": lote.get("cantidad", 0) or 0
                                         }
                                         # Solo agregar si tiene lote o cantidad
@@ -222,8 +349,34 @@ async def obtener_productos(
                     print(f"[OBTENER-PRODUCTOS] Error al buscar lotes: {str(e)}")
                     # Continuar sin lotes si hay error
             
+            # Ordenar lotes por fecha de vencimiento (más cercana primero, luego sin fecha)
+            def ordenar_lotes(lote):
+                fecha = lote.get("fecha_vencimiento")
+                if fecha:
+                    try:
+                        # Convertir a datetime para ordenar
+                        if isinstance(fecha, str):
+                            fecha_dt = datetime.strptime(fecha, "%Y-%m-%d")
+                        else:
+                            fecha_dt = fecha
+                        return (0, fecha_dt)  # Prioridad 0 = tiene fecha
+                    except:
+                        return (1, datetime.max)  # Prioridad 1 = fecha inválida
+                return (2, datetime.max)  # Prioridad 2 = sin fecha
+            
+            lotes_encontrados.sort(key=ordenar_lotes)
+            
             # Calcular cantidad total: usar suma de lotes si existen, sino usar stock
             cantidad_final = cantidad_total_lotes if lotes_encontrados else int(stock)
+            
+            # Obtener stock por sucursal usando la función helper
+            stock_por_sucursal_list = []
+            if codigo_producto:
+                try:
+                    stock_por_sucursal_list = await obtener_stock_por_sucursal(codigo_producto)
+                except Exception as e:
+                    print(f"[OBTENER-PRODUCTOS] Error al obtener stock por sucursal: {str(e)}")
+                    # Continuar sin stock por sucursal si hay error
             
             resultado.append(ProductoItem(
                 id=str(producto["_id"]),
@@ -233,7 +386,8 @@ async def obtener_productos(
                 precio_usd=None,
                 stock=int(stock),  # Mantener para compatibilidad
                 cantidad=cantidad_final,  # Stock total (suma de lotes si existen)
-                lotes=lotes_encontrados if lotes_encontrados else [],  # Array de lotes
+                stock_por_sucursal=stock_por_sucursal_list,  # REQUERIDO: Stock en todas las sucursales
+                lotes=lotes_encontrados if lotes_encontrados else [],  # Array de lotes ordenado
                 sucursal=sucursal or producto.get("sucursal")
             ))
         
@@ -350,9 +504,18 @@ async def buscar_productos(
                                 if item_lotes:
                                     for lote in item_lotes:
                                         # Formatear lote para la respuesta
+                                        fecha_vencimiento = lote.get("fecha_vencimiento")
+                                        # Formatear fecha si es datetime
+                                        if fecha_vencimiento:
+                                            if isinstance(fecha_vencimiento, datetime):
+                                                fecha_vencimiento = fecha_vencimiento.strftime("%Y-%m-%d")
+                                            elif isinstance(fecha_vencimiento, str):
+                                                # Ya está en formato string
+                                                pass
+                                        
                                         lote_formateado = {
                                             "lote": lote.get("numero_lote") or lote.get("lote"),
-                                            "fecha_vencimiento": lote.get("fecha_vencimiento"),
+                                            "fecha_vencimiento": fecha_vencimiento,
                                             "cantidad": lote.get("cantidad", 0) or 0
                                         }
                                         # Solo agregar si tiene lote o cantidad
@@ -364,8 +527,34 @@ async def buscar_productos(
                     print(f"[BUSCAR-PRODUCTOS] Error al buscar lotes: {str(e)}")
                     # Continuar sin lotes si hay error
             
+            # Ordenar lotes por fecha de vencimiento (más cercana primero, luego sin fecha)
+            def ordenar_lotes(lote):
+                fecha = lote.get("fecha_vencimiento")
+                if fecha:
+                    try:
+                        # Convertir a datetime para ordenar
+                        if isinstance(fecha, str):
+                            fecha_dt = datetime.strptime(fecha, "%Y-%m-%d")
+                        else:
+                            fecha_dt = fecha
+                        return (0, fecha_dt)  # Prioridad 0 = tiene fecha
+                    except:
+                        return (1, datetime.max)  # Prioridad 1 = fecha inválida
+                return (2, datetime.max)  # Prioridad 2 = sin fecha
+            
+            lotes_encontrados.sort(key=ordenar_lotes)
+            
             # Calcular cantidad total: usar suma de lotes si existen, sino usar stock
             cantidad_final = cantidad_total_lotes if lotes_encontrados else int(stock)
+            
+            # Obtener stock por sucursal usando la función helper
+            stock_por_sucursal_list = []
+            if codigo_producto:
+                try:
+                    stock_por_sucursal_list = await obtener_stock_por_sucursal(codigo_producto)
+                except Exception as e:
+                    print(f"[BUSCAR-PRODUCTOS] Error al obtener stock por sucursal: {str(e)}")
+                    # Continuar sin stock por sucursal si hay error
             
             resultado.append(ProductoItem(
                 id=str(producto["_id"]),
@@ -375,7 +564,8 @@ async def buscar_productos(
                 precio_usd=None,  # Se calculará en el frontend
                 stock=int(stock),  # Mantener para compatibilidad
                 cantidad=cantidad_final,  # Stock total (suma de lotes si existen)
-                lotes=lotes_encontrados if lotes_encontrados else [],  # Array de lotes
+                stock_por_sucursal=stock_por_sucursal_list,  # REQUERIDO: Stock en todas las sucursales
+                lotes=lotes_encontrados if lotes_encontrados else [],  # Array de lotes ordenado
                 sucursal=sucursal or producto.get("sucursal")
             ))
         

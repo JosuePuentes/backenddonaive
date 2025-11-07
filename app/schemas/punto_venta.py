@@ -16,6 +16,14 @@ class LoteProducto(BaseModel):
     cantidad: Optional[int] = None
 
 
+class StockPorSucursal(BaseModel):
+    """Modelo para stock por sucursal"""
+    sucursal_id: str
+    sucursal_nombre: Optional[str] = None
+    cantidad: int  # Stock total (suma de lotes si existen)
+    stock: int  # Alias para compatibilidad
+
+
 class ProductoItem(BaseModel):
     id: str
     nombre: str
@@ -24,6 +32,7 @@ class ProductoItem(BaseModel):
     precio_usd: Optional[float] = None
     stock: int  # Alias para compatibilidad
     cantidad: Optional[int] = None  # Stock total (suma de lotes si existen)
+    stock_por_sucursal: Optional[List[StockPorSucursal]] = []  # REQUERIDO: Stock en todas las sucursales
     lotes: Optional[List[LoteProducto]] = []  # Array de lotes
     sucursal: Optional[str] = None
 
