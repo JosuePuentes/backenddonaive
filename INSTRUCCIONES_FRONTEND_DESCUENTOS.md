@@ -1,10 +1,106 @@
 # Instrucciones para el Frontend - Manejo de Descuentos en Ventas
 
-## Problema Actual
-El backend ya está guardando los descuentos en las ventas, pero el frontend necesita:
-1. Mostrar el porcentaje de descuento en la interfaz de ventas
-2. Mostrar el descuento aplicado en el modal del cliente
-3. Asegurar que los descuentos se envíen correctamente al backend
+## ✅ Backend Listo
+El backend ya está completamente configurado para:
+- ✅ Guardar `porcentaje_descuento` en el modelo de cliente
+- ✅ Aceptar y almacenar descuentos en las ventas
+- ✅ Devolver descuentos en las respuestas de clientes y ventas
+
+## Lo que el Frontend DEBE Implementar
+
+### 1. **Guardar descuento en el cliente** ⚠️ CRÍTICO
+Cuando se crea o actualiza un cliente, el campo `porcentaje_descuento` debe enviarse:
+
+```javascript
+// Al crear/actualizar cliente
+const clienteData = {
+  cedula: "12345678",
+  nombre: "Juan Pérez",
+  // ... otros campos
+  porcentaje_descuento: 10.0  // ✅ REQUERIDO: Porcentaje de descuento (0-100)
+};
+```
+
+### 2. **Mostrar descuento en el modal del cliente** ⚠️ CRÍTICO
+Cuando se muestra la información del cliente, debe aparecer:
+
+```jsx
+// En el modal del cliente
+{cliente.porcentaje_descuento && (
+  <div className="descuento-badge">
+    <span>Descuento: {cliente.porcentaje_descuento}%</span>
+  </div>
+)}
+```
+
+### 3. **Aplicar descuento automáticamente al seleccionar cliente** ⚠️ CRÍTICO
+Cuando se selecciona un cliente con descuento, aplicar automáticamente a todos los items:
+
+```javascript
+function aplicarDescuentoCliente(cliente, items) {
+  if (!cliente.porcentaje_descuento || cliente.porcentaje_descuento === 0) {
+    return items; // Sin descuento
+  }
+  
+  return items.map(item => {
+    // Guardar precio original ANTES de aplicar descuento
+    const precioOriginalBs = item.precio_unitario;
+    const precioOriginalUsd = item.precio_unitario_usd || 0;
+    
+    // Calcular precio con descuento
+    const descuento = cliente.porcentaje_descuento / 100;
+    const precioConDescuentoBs = precioOriginalBs * (1 - descuento);
+    const precioConDescuentoUsd = precioOriginalUsd * (1 - descuento);
+    
+    return {
+      ...item,
+      precio_unitario_original: precioOriginalBs,  // ✅ REQUERIDO
+      precio_unitario_original_usd: precioOriginalUsd,  // ✅ REQUERIDO
+      precio_unitario: precioConDescuentoBs,  // Actualizado con descuento
+      precio_unitario_usd: precioConDescuentoUsd,  // Actualizado con descuento
+      subtotal: precioConDescuentoBs * item.cantidad,
+      subtotal_usd: precioConDescuentoUsd * item.cantidad,
+      descuento_aplicado: cliente.porcentaje_descuento  // ✅ REQUERIDO
+    };
+  });
+}
+```
+
+### 4. **Mostrar % de descuento en la pantalla de ventas** ⚠️ CRÍTICO
+Debe aparecer visiblemente el descuento aplicado:
+
+```jsx
+// En la pantalla de ventas
+{clienteSeleccionado?.porcentaje_descuento > 0 && (
+  <div className="descuento-activo">
+    <Badge color="success">
+      Descuento: {clienteSeleccionado.porcentaje_descuento}% ACTIVO
+    </Badge>
+  </div>
+)}
+```
+
+### 5. **Mostrar precio original y precio con descuento** ⚠️ CRÍTICO
+En cada item de la venta, mostrar ambos precios:
+
+```jsx
+// En cada item de la lista
+{item.precio_unitario_original && (
+  <div>
+    <span style={{ textDecoration: 'line-through', color: 'gray' }}>
+      {item.precio_unitario_original} Bs
+    </span>
+    <span style={{ color: 'green', fontWeight: 'bold', marginLeft: '8px' }}>
+      {item.precio_unitario} Bs
+    </span>
+    {item.descuento_aplicado > 0 && (
+      <Badge color="success" style={{ marginLeft: '8px' }}>
+        -{item.descuento_aplicado}%
+      </Badge>
+    )}
+  </div>
+)}
+```
 
 ## Estructura de Datos que el Backend Espera
 

@@ -106,6 +106,15 @@ async def crear_cliente(
                     detail="El formato de la fecha de nacimiento debe ser YYYY-MM-DD"
                 )
         
+        # Validar porcentaje de descuento si se proporciona
+        porcentaje_descuento = cliente.porcentaje_descuento
+        if porcentaje_descuento is not None:
+            if porcentaje_descuento < 0 or porcentaje_descuento > 100:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El porcentaje de descuento debe estar entre 0 y 100"
+                )
+        
         # Preparar datos del nuevo cliente
         nuevo_cliente = {
             "cedula": cedula,
@@ -114,6 +123,7 @@ async def crear_cliente(
             "email": cliente.email.strip().lower() if cliente.email else None,
             "direccion": cliente.direccion.strip() if cliente.direccion else None,
             "fecha_nacimiento": cliente.fecha_nacimiento if cliente.fecha_nacimiento else None,
+            "porcentaje_descuento": porcentaje_descuento,  # Guardar descuento del cliente
             "notas": cliente.notas.strip() if cliente.notas else None,
             "fecha_creacion": datetime.utcnow(),
             "fecha_actualizacion": datetime.utcnow()
@@ -325,6 +335,15 @@ async def actualizar_cliente(
                     detail="El formato de la fecha de nacimiento debe ser YYYY-MM-DD"
                 )
         
+        # Validar porcentaje de descuento si se proporciona
+        porcentaje_descuento = cliente_data.porcentaje_descuento
+        if porcentaje_descuento is not None:
+            if porcentaje_descuento < 0 or porcentaje_descuento > 100:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El porcentaje de descuento debe estar entre 0 y 100"
+                )
+        
         # Preparar datos de actualización
         update_data = {
             "cedula": cedula if cedula else cliente_existente.get("cedula"),
@@ -333,6 +352,7 @@ async def actualizar_cliente(
             "email": cliente_data.email.strip().lower() if cliente_data.email else cliente_existente.get("email"),
             "direccion": cliente_data.direccion.strip() if cliente_data.direccion else cliente_existente.get("direccion"),
             "fecha_nacimiento": cliente_data.fecha_nacimiento if cliente_data.fecha_nacimiento else cliente_existente.get("fecha_nacimiento"),
+            "porcentaje_descuento": porcentaje_descuento if porcentaje_descuento is not None else cliente_existente.get("porcentaje_descuento"),
             "notas": cliente_data.notas.strip() if cliente_data.notas else cliente_existente.get("notas"),
             "fecha_actualizacion": datetime.utcnow()
         }

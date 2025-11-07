@@ -11,6 +11,7 @@ class ClienteCreate(BaseModel):
     email: Optional[str] = Field(None, description="Email del cliente")
     direccion: Optional[str] = Field(None, description="Dirección del cliente")
     fecha_nacimiento: Optional[str] = Field(None, description="Fecha de nacimiento (YYYY-MM-DD)")
+    porcentaje_descuento: Optional[float] = Field(None, ge=0, le=100, description="Porcentaje de descuento del cliente (0-100)")
     notas: Optional[str] = Field(None, description="Notas adicionales sobre el cliente")
 
 
@@ -23,6 +24,7 @@ class ClienteResponse(BaseModel):
     email: Optional[str] = None
     direccion: Optional[str] = None
     fecha_nacimiento: Optional[str] = None
+    porcentaje_descuento: Optional[float] = None  # Porcentaje de descuento del cliente (0-100)
     notas: Optional[str] = None
     fecha_creacion: Optional[str] = None
     fecha_actualizacion: Optional[str] = None
