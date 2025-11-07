@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Depends, Body
 from app.db.mongo import get_collection
 from app.core.get_current_user import get_current_user
-from app.schemas.clientes import ClienteCreate, ClienteResponse
+from app.schemas.clientes import ClienteCreate, ClienteResponse, ComprasTotalResponse, ItemCompraResponse
 from bson import ObjectId
 from bson.errors import InvalidId
 from typing import List, Optional
@@ -214,5 +214,156 @@ async def obtener_cliente(
         raise HTTPException(
             status_code=500,
             detail=f"Error al obtener cliente: {str(e)}"
+        )
+
+
+@router.get("/clientes/{cliente_id}/compras/total", response_model=ComprasTotalResponse)
+async def obtener_total_compras_cliente(
+    cliente_id: str,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Obtener el total de compras de un cliente.
+    Suma todas las ventas donde el campo 'cliente' coincide con cliente_id.
+    Requiere autenticación.
+    """
+    try:
+        # Validar que el cliente existe
+        clientes_collection = get_collection("CLIENTES")
+        try:
+            oid = ObjectId(cliente_id)
+        except InvalidId:
+            raise HTTPException(
+                status_code=400,
+                detail="ID de cliente inválido"
+            )
+        
+        cliente = await clientes_collection.find_one({"_id": oid})
+        if not cliente:
+            raise HTTPException(
+                status_code=404,
+                detail="Cliente no encontrado"
+            )
+        
+        # Buscar todas las ventas del cliente
+        ventas_collection = get_collection("VENTAS")
+        
+        # Buscar ventas donde el campo 'cliente' coincide con cliente_id (puede ser ObjectId o string)
+        ventas = await ventas_collection.find({
+            "$or": [
+                {"cliente": cliente_id},
+                {"cliente": oid}
+            ]
+        }).to_list(length=None)
+        
+        # Calcular totales
+        total_usd = 0.0
+        total_bs = 0.0
+        numero_ventas = len(ventas)
+        
+        for venta in ventas:
+            total_bs += venta.get("total_bs", 0) or 0
+            total_usd += venta.get("total_usd", 0) or 0
+        
+        return ComprasTotalResponse(
+            cliente_id=cliente_id,
+            total_usd=round(total_usd, 2),
+            total_bs=round(total_bs, 2),
+            numero_ventas=numero_ventas
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[OBTENER-TOTAL-COMPRAS] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener total de compras: {str(e)}"
+        )
+
+
+@router.get("/clientes/{cliente_id}/compras/items", response_model=List[ItemCompraResponse])
+async def obtener_items_comprados_cliente(
+    cliente_id: str,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Obtener todos los items comprados por un cliente.
+    Retorna un array con todos los items de todas las ventas del cliente.
+    Requiere autenticación.
+    """
+    try:
+        # Validar que el cliente existe
+        clientes_collection = get_collection("CLIENTES")
+        try:
+            oid = ObjectId(cliente_id)
+        except InvalidId:
+            raise HTTPException(
+                status_code=400,
+                detail="ID de cliente inválido"
+            )
+        
+        cliente = await clientes_collection.find_one({"_id": oid})
+        if not cliente:
+            raise HTTPException(
+                status_code=404,
+                detail="Cliente no encontrado"
+            )
+        
+        # Buscar todas las ventas del cliente
+        ventas_collection = get_collection("VENTAS")
+        
+        # Buscar ventas donde el campo 'cliente' coincide con cliente_id (puede ser ObjectId o string)
+        ventas = await ventas_collection.find({
+            "$or": [
+                {"cliente": cliente_id},
+                {"cliente": oid}
+            ]
+        }).sort("fecha_hora", -1).to_list(length=None)  # Ordenar por fecha más reciente primero
+        
+        # Extraer todos los items de todas las ventas
+        items_comprados = []
+        
+        for venta in ventas:
+            fecha_venta = venta.get("fecha_hora") or venta.get("fecha")
+            numero_factura = venta.get("numero_factura")
+            
+            # Formatear fecha
+            if isinstance(fecha_venta, datetime):
+                fecha_venta_str = fecha_venta.isoformat()
+            elif isinstance(fecha_venta, str):
+                fecha_venta_str = fecha_venta
+            else:
+                fecha_venta_str = datetime.utcnow().isoformat()
+            
+            # Procesar items de esta venta
+            items_venta = venta.get("items", [])
+            for item in items_venta:
+                items_comprados.append(ItemCompraResponse(
+                    producto_id=str(item.get("producto_id", "")),
+                    nombre=item.get("nombre", "Producto sin nombre"),
+                    codigo=item.get("codigo"),
+                    cantidad=item.get("cantidad", 0) or 0,
+                    precio_unitario=float(item.get("precio_unitario", 0) or 0),
+                    precio_unitario_usd=item.get("precio_unitario_usd"),
+                    subtotal=float(item.get("subtotal", 0) or 0),
+                    subtotal_usd=item.get("subtotal_usd"),
+                    fecha_venta=fecha_venta_str,
+                    numero_factura=numero_factura
+                ))
+        
+        return items_comprados
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[OBTENER-ITEMS-COMPRADOS] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener items comprados: {str(e)}"
         )
 

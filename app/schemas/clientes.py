@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -29,4 +29,26 @@ class ClienteResponse(BaseModel):
     
     class Config:
         extra = "allow"  # Permite campos adicionales que puedan existir en los clientes
+
+
+class ComprasTotalResponse(BaseModel):
+    """Modelo de respuesta para el total de compras de un cliente"""
+    cliente_id: str
+    total_usd: float
+    total_bs: float
+    numero_ventas: int
+
+
+class ItemCompraResponse(BaseModel):
+    """Modelo de respuesta para un item comprado por un cliente"""
+    producto_id: str
+    nombre: str
+    codigo: Optional[str] = None
+    cantidad: int
+    precio_unitario: float
+    precio_unitario_usd: Optional[float] = None
+    subtotal: float
+    subtotal_usd: Optional[float] = None
+    fecha_venta: str
+    numero_factura: Optional[str] = None
 
