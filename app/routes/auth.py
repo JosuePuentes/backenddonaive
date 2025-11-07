@@ -172,16 +172,85 @@ async def obtener_usuarios(usuario_actual: dict = Depends(get_current_user)):
 
 @router.post("/auth/login")
 async def login_user(data: LoginInput):
+    """
+    Login de usuario.
+    Devuelve el token y el usuario con permisos actualizados desde la base de datos.
+    """
     usuario, token = await login_y_token(data.correo, data.contraseña, return_user=True)
     if not token or not usuario:
         raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
-    # El usuario debe ser un dict con el campo 'farmacias'
+    
+    # Asegurar que los permisos vengan desde la BD (ya vienen, pero lo verificamos)
+    usuarios_collection = get_collection("USUARIOS")
+    usuario_actualizado = await usuarios_collection.find_one(
+        {"correo": data.correo},
+        {"contraseña": 0}  # Excluir contraseña
+    )
+    
+    if usuario_actualizado:
+        # Usar el usuario actualizado desde la BD para tener permisos frescos
+        usuario_actualizado["_id"] = str(usuario_actualizado["_id"])
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "usuario": usuario_actualizado
+        }
+    
+    # Fallback al usuario original si no se encuentra actualizado
     usuario["_id"] = str(usuario["_id"])
+    # Remover contraseña si está presente
+    usuario.pop("contraseña", None)
     return {
         "access_token": token,
         "token_type": "bearer",
         "usuario": usuario
     }
+
+
+@router.get("/auth/me")
+async def obtener_usuario_actual(usuario: dict = Depends(get_current_user)):
+    """
+    Obtener información del usuario actual autenticado.
+    Devuelve el usuario completo con permisos actualizados desde la base de datos.
+    Requiere autenticación (token JWT).
+    """
+    try:
+        usuarios_collection = get_collection("USUARIOS")
+        
+        # Obtener usuario actualizado desde la BD para tener permisos frescos
+        correo = usuario.get("correo")
+        if not correo:
+            raise HTTPException(
+                status_code=401,
+                detail="No se pudo identificar al usuario"
+            )
+        
+        usuario_actualizado = await usuarios_collection.find_one(
+            {"correo": correo},
+            {"contraseña": 0}  # Excluir contraseña
+        )
+        
+        if not usuario_actualizado:
+            raise HTTPException(
+                status_code=404,
+                detail="Usuario no encontrado"
+            )
+        
+        # Formatear respuesta
+        usuario_actualizado["_id"] = str(usuario_actualizado["_id"])
+        
+        return usuario_actualizado
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[OBTENER-USUARIO-ACTUAL] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener usuario actual: {str(e)}"
+        )
 
 @router.post("/admin/reset-password")
 async def reset_admin_password(data: dict = Body(...)):

@@ -89,6 +89,27 @@ try:
             items.append(u)
         return {"usuarios": items}
 
+    @app.get("/modificar-usuarios/{id}")
+    async def obtener_usuario_modificar(id: str, usuario: dict = Depends(get_current_user)):
+        """Obtener usuario específico por ID desde el módulo de modificar usuarios - Solo admin"""
+        if usuario.get("correo") != "admin@gmail.com":
+            raise HTTPException(status_code=403, detail="Solo el usuario admin puede ver usuarios")
+
+        try:
+            oid = ObjectId(id)
+        except InvalidId:
+            raise HTTPException(status_code=400, detail="ID inválido")
+
+        usuarios_collection = get_collection("USUARIOS")
+        # Obtener usuario con permisos actualizados desde la BD
+        usuario_obj = await usuarios_collection.find_one({"_id": oid}, {"contraseña": 0})
+        
+        if not usuario_obj:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        usuario_obj["_id"] = str(usuario_obj["_id"])
+        return {"usuario": usuario_obj}
+
     @app.patch("/modificar-usuarios/{id}")
     async def actualizar_usuario_modificar(id: str, data: dict = Body(...), usuario: dict = Depends(get_current_user)):
         """Actualizar usuario desde el módulo de modificar usuarios - Solo admin"""
@@ -114,7 +135,7 @@ try:
         if result.matched_count == 0:
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
         
-        # Devolver usuario actualizado sin contraseña
+        # Devolver usuario actualizado sin contraseña con permisos actualizados desde la BD
         actualizado = await usuarios_collection.find_one({"_id": oid}, {"contraseña": 0})
         actualizado["_id"] = str(actualizado["_id"])
         return {"usuario": actualizado}
