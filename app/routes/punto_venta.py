@@ -1256,3 +1256,59 @@ async def registrar_venta(
             status_code=500,
             detail=f"Error al registrar la venta: {str(e)}"
         )
+
+
+@router.get("/ventas", response_model=List[VentaResponse])
+async def obtener_ventas_del_dia(
+    fecha: str = Query(..., description="Fecha en formato YYYY-MM-DD"),
+    sucursal: Optional[str] = Query(None, description="ID de la sucursal (opcional)"),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Obtiene todas las ventas del día para una fecha específica.
+    Opcionalmente filtra por sucursal.
+    Requiere autenticación.
+    """
+    try:
+        # Validar formato de fecha
+        try:
+            datetime.strptime(fecha, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Formato de fecha inválido. Use YYYY-MM-DD"
+            )
+        
+        # Obtener colección de ventas
+        ventas_collection = get_collection("VENTAS")
+        
+        # Construir filtro
+        filtro = {"fecha": fecha}
+        
+        # Si se especifica sucursal, agregar al filtro
+        if sucursal:
+            filtro["sucursal"] = sucursal
+        
+        # Buscar ventas
+        ventas = await ventas_collection.find(filtro).sort("fecha_hora", -1).to_list(length=None)
+        
+        # Formatear resultados
+        resultado = []
+        for venta in ventas:
+            venta["_id"] = str(venta["_id"])
+            resultado.append(VentaResponse(**venta))
+        
+        print(f"[OBTENER-VENTAS] Encontradas {len(resultado)} ventas para fecha {fecha}" + (f" y sucursal {sucursal}" if sucursal else ""))
+        
+        return resultado
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[OBTENER-VENTAS] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener ventas del día: {str(e)}"
+        )
