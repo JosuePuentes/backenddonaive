@@ -16,6 +16,51 @@ import re
 router = APIRouter()
 
 
+async def obtener_nombre_sucursal(sucursal_id) -> str:
+    """
+    Función helper para obtener el nombre de una sucursal por su ID.
+    Intenta buscar en SUCURSALES y FARMACIAS, usando ObjectId o string.
+    """
+    if not sucursal_id:
+        return str(sucursal_id) if sucursal_id else "Sin nombre"
+    
+    sucursal_id_str = str(sucursal_id)
+    
+    try:
+        sucursales_collection = get_collection("SUCURSALES")
+        # Intentar buscar por ObjectId
+        try:
+            sucursal_doc = await sucursales_collection.find_one({"_id": ObjectId(sucursal_id)})
+            if sucursal_doc:
+                return sucursal_doc.get("nombre") or sucursal_doc.get("farmacia") or sucursal_id_str
+        except (InvalidId, ValueError):
+            # Si no es ObjectId válido, buscar por string
+            try:
+                sucursal_doc = await sucursales_collection.find_one({"_id": sucursal_id_str})
+                if sucursal_doc:
+                    return sucursal_doc.get("nombre") or sucursal_doc.get("farmacia") or sucursal_id_str
+            except:
+                pass
+        
+        # Si no se encuentra en SUCURSALES, intentar en FARMACIAS
+        farmacias_collection = get_collection("FARMACIAS")
+        try:
+            farmacia_doc = await farmacias_collection.find_one({"_id": ObjectId(sucursal_id)})
+            if farmacia_doc:
+                return farmacia_doc.get("nombre") or farmacia_doc.get("farmacia") or sucursal_id_str
+        except (InvalidId, ValueError):
+            try:
+                farmacia_doc = await farmacias_collection.find_one({"_id": sucursal_id_str})
+                if farmacia_doc:
+                    return farmacia_doc.get("nombre") or farmacia_doc.get("farmacia") or sucursal_id_str
+            except:
+                pass
+    except Exception as e:
+        print(f"[OBTENER-NOMBRE-SUCURSAL] Error al obtener nombre de sucursal {sucursal_id_str}: {str(e)}")
+    
+    return sucursal_id_str
+
+
 async def obtener_stock_por_sucursal(codigo_producto: str) -> List[dict]:
     """
     Función helper para obtener el stock de un producto en todas las sucursales.
@@ -34,7 +79,10 @@ async def obtener_stock_por_sucursal(codigo_producto: str) -> List[dict]:
             sucursales = await sucursales_collection.find({}).to_list(length=None)
             for suc in sucursales:
                 suc_id = str(suc.get("_id", ""))
-                suc_nombre = suc.get("nombre") or suc.get("farmacia") or suc_id
+                suc_nombre = suc.get("nombre") or suc.get("farmacia")
+                if not suc_nombre:
+                    # Si no tiene nombre, buscar usando la función helper
+                    suc_nombre = await obtener_nombre_sucursal(suc.get("_id"))
                 sucursales_dict[suc_id] = suc_nombre
         except Exception as e:
             print(f"[OBTENER-STOCK] Error al obtener sucursales: {str(e)}")
@@ -45,7 +93,9 @@ async def obtener_stock_por_sucursal(codigo_producto: str) -> List[dict]:
                 farmacias = await farmacias_collection.find({}).to_list(length=None)
                 for farm in farmacias:
                     farm_id = str(farm.get("_id", ""))
-                    farm_nombre = farm.get("nombre") or farm.get("farmacia") or farm_id
+                    farm_nombre = farm.get("nombre") or farm.get("farmacia")
+                    if not farm_nombre:
+                        farm_nombre = await obtener_nombre_sucursal(farm.get("_id"))
                     sucursales_dict[farm_id] = farm_nombre
             except Exception as e:
                 print(f"[OBTENER-STOCK] Error al obtener farmacias: {str(e)}")
@@ -66,7 +116,7 @@ async def obtener_stock_por_sucursal(codigo_producto: str) -> List[dict]:
         }).to_list(length=None)
         
         # Primero, agregar todas las sucursales que tienen inventarios activos
-        # (aunque no estén en la colección SUCURSALES)
+        # (aunque no estén en la colección SUCURSALES) y obtener sus nombres correctamente
         for inventario in inventarios:
             sucursal_id = inventario.get("sucursal")
             if not sucursal_id:
@@ -74,14 +124,24 @@ async def obtener_stock_por_sucursal(codigo_producto: str) -> List[dict]:
             
             sucursal_id_str = str(sucursal_id)
             if sucursal_id_str not in stock_por_sucursal:
-                # Obtener nombre de la sucursal desde el inventario si está disponible
-                sucursal_nombre = inventario.get("sucursal_nombre") or inventario.get("farmacia") or sucursal_id_str
+                # Obtener nombre de la sucursal usando la función helper
+                sucursal_nombre = await obtener_nombre_sucursal(sucursal_id)
+                # Si el inventario tiene un nombre, usarlo como fallback
+                if sucursal_nombre == sucursal_id_str:
+                    sucursal_nombre = inventario.get("sucursal_nombre") or inventario.get("farmacia") or sucursal_id_str
+                
                 stock_por_sucursal[sucursal_id_str] = {
                     "sucursal_id": sucursal_id_str,
                     "sucursal_nombre": sucursal_nombre,
                     "cantidad": 0,
                     "stock": 0
                 }
+            else:
+                # Actualizar el nombre si no está bien definido
+                if stock_por_sucursal[sucursal_id_str]["sucursal_nombre"] == sucursal_id_str:
+                    sucursal_nombre = await obtener_nombre_sucursal(sucursal_id)
+                    if sucursal_nombre != sucursal_id_str:
+                        stock_por_sucursal[sucursal_id_str]["sucursal_nombre"] = sucursal_nombre
         
         # Buscar items con este código en los inventarios
         for inventario in inventarios:
@@ -109,9 +169,11 @@ async def obtener_stock_por_sucursal(codigo_producto: str) -> List[dict]:
                         # Si no hay lotes, usar cantidad del item
                         cantidad_item = item.get("cantidad", 0) or 0
                     
-                    # Asegurar que la sucursal esté en el diccionario
+                    # Asegurar que la sucursal esté en el diccionario con nombre correcto
                     if sucursal_id_str not in stock_por_sucursal:
-                        sucursal_nombre = inventario.get("sucursal_nombre") or inventario.get("farmacia") or sucursal_id_str
+                        sucursal_nombre = await obtener_nombre_sucursal(sucursal_id)
+                        if sucursal_nombre == sucursal_id_str:
+                            sucursal_nombre = inventario.get("sucursal_nombre") or inventario.get("farmacia") or sucursal_id_str
                         stock_por_sucursal[sucursal_id_str] = {
                             "sucursal_id": sucursal_id_str,
                             "sucursal_nombre": sucursal_nombre,
@@ -131,6 +193,8 @@ async def obtener_stock_por_sucursal(codigo_producto: str) -> List[dict]:
         
     except Exception as e:
         print(f"[OBTENER-STOCK] Error al obtener stock por sucursal: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return []
 
 
