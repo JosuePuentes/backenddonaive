@@ -84,3 +84,11 @@ class VentaResponse(BaseModel):
     porcentaje_descuento: Optional[float] = None  # Porcentaje de descuento aplicado a toda la venta
     notas: Optional[str] = None
     _id: str
+
+
+class VentasUsuarioResponse(BaseModel):
+    """Modelo de respuesta para GET /punto-venta/ventas/usuario"""
+    facturas: List[VentaResponse]
+    total: int
+    limit: int
+    offset: int

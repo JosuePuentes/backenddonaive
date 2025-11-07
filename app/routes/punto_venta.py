@@ -6,6 +6,7 @@ from app.schemas.punto_venta import (
     ProductoItem,
     VentaRequest,
     VentaResponse,
+    VentasUsuarioResponse,
     MetodoPago
 )
 from bson import ObjectId
@@ -1403,13 +1404,13 @@ async def obtener_ventas_del_dia(
         )
 
 
-@router.get("/ventas/usuario", response_model=List[VentaResponse])
+@router.get("/ventas/usuario", response_model=VentasUsuarioResponse)
 async def obtener_ventas_usuario(
-    cajero: Optional[str] = Query(None, description="Correo o ID del cajero"),
+    cajero: Optional[str] = Query(None, description="Correo del usuario o nombre del cajero"),
     sucursal: Optional[str] = Query(None, description="ID de la sucursal"),
     fecha_inicio: Optional[str] = Query(None, description="Fecha de inicio en formato YYYY-MM-DD"),
     fecha_fin: Optional[str] = Query(None, description="Fecha de fin en formato YYYY-MM-DD"),
-    limit: int = Query(50, ge=1, le=1000, description="Número máximo de registros a devolver"),
+    limit: int = Query(100, ge=1, le=1000, description="Número máximo de registros a devolver"),
     offset: int = Query(0, ge=0, description="Número de registros a saltar (para paginación)"),
     usuario: dict = Depends(get_current_user)
 ):
@@ -1418,7 +1419,8 @@ async def obtener_ventas_usuario(
     Permite filtrar por cajero, sucursal y rango de fechas.
     Requiere autenticación.
     
-    Retorna una lista de ventas ordenadas por fecha_hora (más recientes primero).
+    Retorna un objeto con facturas, total, limit y offset.
+    Las ventas están ordenadas por fecha_hora (más recientes primero).
     """
     try:
         # Obtener colección de ventas
@@ -1440,7 +1442,11 @@ async def obtener_ventas_usuario(
         
         # Filtrar por sucursal
         if sucursal:
-            filtro["sucursal"] = sucursal
+            # Intentar convertir a ObjectId si es posible, sino usar como string
+            try:
+                filtro["sucursal"] = ObjectId(sucursal)
+            except (InvalidId, ValueError):
+                filtro["sucursal"] = sucursal
         
         # Filtrar por rango de fechas
         if fecha_inicio and fecha_fin:
@@ -1501,21 +1507,29 @@ async def obtener_ventas_usuario(
                 # Si hay múltiples condiciones, usar $and
                 filtro["$and"] = condiciones_and
         
+        # Contar total de ventas que coinciden con el filtro
+        total = await ventas_collection.count_documents(filtro)
+        
         # Buscar ventas con paginación
         ventas = await ventas_collection.find(filtro).sort("fecha_hora", -1).skip(offset).limit(limit).to_list(length=limit)
         
         # Formatear resultados
-        resultado = []
+        facturas = []
         for venta in ventas:
             venta["_id"] = str(venta["_id"])
             # Asegurar que todos los campos estén presentes
-            resultado.append(VentaResponse(**venta))
+            facturas.append(VentaResponse(**venta))
         
-        print(f"[OBTENER-VENTAS-USUARIO] Encontradas {len(resultado)} ventas")
+        print(f"[OBTENER-VENTAS-USUARIO] Encontradas {len(facturas)} ventas de {total} totales")
         print(f"  - Filtros: cajero={cajero}, sucursal={sucursal}, fecha_inicio={fecha_inicio}, fecha_fin={fecha_fin}")
         print(f"  - Paginación: offset={offset}, limit={limit}")
         
-        return resultado
+        return VentasUsuarioResponse(
+            facturas=facturas,
+            total=total,
+            limit=limit,
+            offset=offset
+        )
         
     except HTTPException:
         raise
