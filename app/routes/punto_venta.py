@@ -941,7 +941,8 @@ async def registrar_venta(
                 detail="Debe especificar al menos un método de pago"
             )
         
-        # Validar que la suma de métodos de pago coincida con el total
+        # Validar que la suma de métodos de pago sea suficiente para cubrir el total
+        # IMPORTANTE: La suma puede ser mayor que el total cuando hay vuelto
         # IMPORTANTE: Convertir todos los montos a USD para comparar
         suma_metodos_usd = 0.0
         for mp in venta.metodos_pago:
@@ -966,11 +967,18 @@ async def registrar_venta(
         for mp in venta.metodos_pago:
             print(f"  - Método: {mp.tipo}, Monto: {mp.monto}, Divisa: {mp.divisa}")
         
-        if abs(suma_metodos_usd - total_usd_calculado) > 0.01:  # Tolerancia para decimales
+        # Validar que el pago sea suficiente (puede ser mayor cuando hay vuelto)
+        if suma_metodos_usd < total_usd_calculado - 0.01:  # Tolerancia para decimales
+            vuelto = suma_metodos_usd - total_usd_calculado if suma_metodos_usd > total_usd_calculado else 0
             raise HTTPException(
                 status_code=400,
-                detail=f"La suma de métodos de pago (${suma_metodos_usd:.2f} USD) no coincide con el total (${total_usd_calculado:.2f} USD). Verifica que los montos y divisas sean correctos."
+                detail=f"Pago insuficiente. Total: ${total_usd_calculado:.2f} USD, Pagado: ${suma_metodos_usd:.2f} USD. Faltan ${(total_usd_calculado - suma_metodos_usd):.2f} USD."
             )
+        
+        # Log si hay vuelto
+        if suma_metodos_usd > total_usd_calculado + 0.01:
+            vuelto = suma_metodos_usd - total_usd_calculado
+            print(f"[REGISTRAR-VENTA] Vuelto calculado: ${vuelto:.2f} USD (Total: ${total_usd_calculado:.2f}, Pagado: ${suma_metodos_usd:.2f})")
         
         # Validar stock de productos en inventarios
         inventarios_collection = get_collection("INVENTARIOS")
