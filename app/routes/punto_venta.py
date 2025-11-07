@@ -747,35 +747,214 @@ async def registrar_venta(
         # Insertar venta
         result = await ventas_collection.insert_one(venta_doc)
         
-        # Actualizar stock de productos
-        for item in venta.items:
+        # Actualizar stock de productos e inventarios con lógica FIFO para lotes
+        inventarios_collection = get_collection("INVENTARIOS")
+        
+        for item_venta in venta.items:
             try:
-                producto = await productos_collection.find_one({"_id": ObjectId(item.producto_id)})
-                nuevo_stock = producto.get("stock", 0) - item.cantidad
+                print(f"[REGISTRAR-VENTA] Procesando item: {item_venta.codigo}, cantidad: {item_venta.cantidad}")
                 
+                # Obtener código del producto
+                codigo_producto = item_venta.codigo
+                if not codigo_producto:
+                    # Si no hay código, intentar obtenerlo del producto
+                    try:
+                        producto = await productos_collection.find_one({"_id": ObjectId(item_venta.producto_id)})
+                        if producto:
+                            codigo_producto = producto.get("codigo")
+                    except:
+                        pass
+                
+                if not codigo_producto:
+                    print(f"[REGISTRAR-VENTA] Advertencia: No se encontró código para producto {item_venta.producto_id}")
+                    continue
+                
+                cantidad_a_descontar = item_venta.cantidad
+                
+                # Buscar inventarios activos de la sucursal
                 if venta.sucursal:
-                    # Actualizar stock por sucursal
-                    stock_sucursal = producto.get("stock_sucursal", {})
-                    if isinstance(stock_sucursal, dict):
-                        stock_actual = stock_sucursal.get(venta.sucursal, producto.get("stock", 0))
-                        stock_sucursal[venta.sucursal] = stock_actual - item.cantidad
-                        await productos_collection.update_one(
-                            {"_id": ObjectId(item.producto_id)},
-                            {"$set": {"stock_sucursal": stock_sucursal, "stock": nuevo_stock}}
-                        )
+                    inventarios = await inventarios_collection.find({
+                        "sucursal": venta.sucursal,
+                        "estado": "activo"
+                    }).sort("fecha_creacion", -1).to_list(length=50)  # Buscar en los más recientes
+                    
+                    # Buscar el item en los inventarios
+                    item_encontrado = None
+                    inventario_encontrado = None
+                    
+                    for inventario in inventarios:
+                        items = inventario.get("items", []) or inventario.get("items_inventario", [])
+                        for item in items:
+                            item_codigo = item.get("codigo")
+                            if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                                item_encontrado = item
+                                inventario_encontrado = inventario
+                                break
+                        if item_encontrado:
+                            break
+                    
+                    if not item_encontrado or not inventario_encontrado:
+                        print(f"[REGISTRAR-VENTA] Advertencia: No se encontró item con código {codigo_producto} en inventarios de sucursal {venta.sucursal}")
+                        # Continuar con actualización de stock en PRODUCTOS como fallback
+                        try:
+                            producto = await productos_collection.find_one({"_id": ObjectId(item_venta.producto_id)})
+                            if producto:
+                                nuevo_stock = producto.get("stock", 0) - cantidad_a_descontar
+                                await productos_collection.update_one(
+                                    {"_id": ObjectId(item_venta.producto_id)},
+                                    {"$inc": {"stock": -cantidad_a_descontar}}
+                                )
+                        except:
+                            pass
+                        continue
+                    
+                    # Verificar stock disponible
+                    lotes = item_encontrado.get("lotes", [])
+                    stock_disponible = 0
+                    
+                    if lotes:
+                        # Calcular stock total de lotes
+                        for lote in lotes:
+                            stock_disponible += lote.get("cantidad", 0) or 0
                     else:
-                        await productos_collection.update_one(
-                            {"_id": ObjectId(item.producto_id)},
-                            {"$inc": {"stock": -item.cantidad}}
+                        # Si no hay lotes, usar cantidad del item
+                        stock_disponible = item_encontrado.get("cantidad", 0) or 0
+                    
+                    print(f"[REGISTRAR-VENTA] Stock disponible: {stock_disponible}, cantidad a descontar: {cantidad_a_descontar}")
+                    
+                    if stock_disponible < cantidad_a_descontar:
+                        print(f"[REGISTRAR-VENTA] ERROR: Stock insuficiente. Disponible: {stock_disponible}, Requerido: {cantidad_a_descontar}")
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Stock insuficiente para el producto {codigo_producto}. Disponible: {stock_disponible}, Requerido: {cantidad_a_descontar}"
                         )
-                else:
-                    await productos_collection.update_one(
-                        {"_id": ObjectId(item.producto_id)},
-                        {"$inc": {"stock": -item.cantidad}}
+                    
+                    # Descontar stock usando FIFO (First In First Out)
+                    cantidad_restante = cantidad_a_descontar
+                    
+                    if lotes:
+                        # Ordenar lotes por fecha de vencimiento (más antiguos primero, luego sin fecha)
+                        def ordenar_lotes_fifo(lote):
+                            fecha = lote.get("fecha_vencimiento")
+                            if fecha:
+                                try:
+                                    if isinstance(fecha, str):
+                                        fecha_dt = datetime.strptime(fecha, "%Y-%m-%d")
+                                    else:
+                                        fecha_dt = fecha
+                                    return (0, fecha_dt)  # Prioridad 0 = tiene fecha
+                                except:
+                                    return (1, datetime.max)  # Prioridad 1 = fecha inválida
+                            return (2, datetime.max)  # Prioridad 2 = sin fecha
+                        
+                        lotes_ordenados = sorted(lotes, key=ordenar_lotes_fifo)
+                        
+                        # Descontar de lotes (FIFO)
+                        lotes_actualizados = []
+                        for lote in lotes_ordenados:
+                            if cantidad_restante <= 0:
+                                # Ya se descontó todo, agregar el lote sin modificar
+                                lotes_actualizados.append(lote)
+                                continue
+                            
+                            cantidad_lote = lote.get("cantidad", 0) or 0
+                            
+                            if cantidad_lote <= cantidad_restante:
+                                # Descontar todo el lote
+                                cantidad_restante -= cantidad_lote
+                                # No agregar el lote si queda en 0 (eliminarlo)
+                                print(f"[REGISTRAR-VENTA] Descontando lote completo: {lote.get('numero_lote', 'N/A')}, cantidad: {cantidad_lote}")
+                                # No agregar el lote a lotes_actualizados (se elimina)
+                            else:
+                                # Descontar parcialmente del lote
+                                lote["cantidad"] = cantidad_lote - cantidad_restante
+                                print(f"[REGISTRAR-VENTA] Descontando parcialmente lote: {lote.get('numero_lote', 'N/A')}, cantidad restante: {lote['cantidad']}")
+                                cantidad_restante = 0
+                                lotes_actualizados.append(lote)
+                        
+                        # Actualizar lotes del item
+                        item_encontrado["lotes"] = lotes_actualizados
+                        
+                        # Recalcular cantidad total del item (suma de lotes)
+                        cantidad_total_lotes = sum(l.get("cantidad", 0) or 0 for l in lotes_actualizados)
+                        item_encontrado["cantidad"] = cantidad_total_lotes
+                        
+                        print(f"[REGISTRAR-VENTA] Cantidad total después de descontar lotes: {cantidad_total_lotes}")
+                    else:
+                        # No hay lotes, descontar de la cantidad del item
+                        cantidad_actual = item_encontrado.get("cantidad", 0) or 0
+                        item_encontrado["cantidad"] = cantidad_actual - cantidad_a_descontar
+                        print(f"[REGISTRAR-VENTA] Descontando de cantidad del item: {cantidad_actual} - {cantidad_a_descontar} = {item_encontrado['cantidad']}")
+                    
+                    # Actualizar el item en el inventario
+                    items = inventario_encontrado.get("items", []) or inventario_encontrado.get("items_inventario", [])
+                    for idx, item in enumerate(items):
+                        item_codigo = item.get("codigo")
+                        if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                            items[idx] = item_encontrado
+                            break
+                    
+                    inventario_encontrado["items"] = items
+                    inventario_encontrado["items_inventario"] = items  # Mantener ambos por compatibilidad
+                    
+                    # Recalcular totales del inventario
+                    costo_total_inventario = 0.0
+                    total_existencias = 0
+                    
+                    for item_inv in items:
+                        cantidad_item = item_inv.get("cantidad", 0) or 0
+                        costo_unitario_item = item_inv.get("costo_unitario", 0) or 0
+                        costo_total_inventario += costo_unitario_item * cantidad_item
+                        total_existencias += cantidad_item
+                    
+                    # Actualizar inventario
+                    await inventarios_collection.update_one(
+                        {"_id": inventario_encontrado["_id"]},
+                        {
+                            "$set": {
+                                "items": items,
+                                "items_inventario": items,
+                                "costo": costo_total_inventario,
+                                "total_items": total_existencias
+                            }
+                        }
                     )
+                    
+                    print(f"[REGISTRAR-VENTA] Inventario actualizado. Costo total: {costo_total_inventario}, Total existencias: {total_existencias}")
+                
+                # También actualizar stock en PRODUCTOS como respaldo
+                try:
+                    producto = await productos_collection.find_one({"_id": ObjectId(item_venta.producto_id)})
+                    if producto:
+                        if venta.sucursal:
+                            stock_sucursal = producto.get("stock_sucursal", {})
+                            if isinstance(stock_sucursal, dict):
+                                stock_actual = stock_sucursal.get(venta.sucursal, producto.get("stock", 0))
+                                stock_sucursal[venta.sucursal] = stock_actual - cantidad_a_descontar
+                                await productos_collection.update_one(
+                                    {"_id": ObjectId(item_venta.producto_id)},
+                                    {"$set": {"stock_sucursal": stock_sucursal}, "$inc": {"stock": -cantidad_a_descontar}}
+                                )
+                            else:
+                                await productos_collection.update_one(
+                                    {"_id": ObjectId(item_venta.producto_id)},
+                                    {"$inc": {"stock": -cantidad_a_descontar}}
+                                )
+                        else:
+                            await productos_collection.update_one(
+                                {"_id": ObjectId(item_venta.producto_id)},
+                                {"$inc": {"stock": -cantidad_a_descontar}}
+                            )
+                except Exception as e:
+                    print(f"[REGISTRAR-VENTA] Advertencia: Error al actualizar stock en PRODUCTOS: {str(e)}")
+                    
+            except HTTPException:
+                raise
             except Exception as e:
-                # Log del error pero no fallar la venta
-                print(f"Error al actualizar stock del producto {item.producto_id}: {str(e)}")
+                # Log del error pero no fallar la venta si es un error menor
+                print(f"[REGISTRAR-VENTA] Error al actualizar stock del item {item_venta.codigo}: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
         
         # Retornar respuesta
         venta_doc["_id"] = str(result.inserted_id)
