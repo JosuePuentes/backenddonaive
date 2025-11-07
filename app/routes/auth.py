@@ -1834,7 +1834,10 @@ async def modificar_item_inventario(
             print(f"[MODIFICAR-ITEM] update_fields completo: {update_fields}")
             print(f"[MODIFICAR-ITEM] Paso 7: Ejecutando actualización en MongoDB")
             
-            # Actualizar el item
+            # Actualizar el item en MongoDB
+            # NOTA: En MongoDB con Motor (async), update_one() ya guarda los cambios directamente
+            # No hay necesidad de item.save() - update_one() persiste los cambios automáticamente
+            print(f"[MODIFICAR-ITEM] Guardando cambios en MongoDB con update_one()")
             result = await collection.update_one(
                 {"_id": ObjectId(inventario_id)},
                 {"$set": update_fields}
@@ -1868,21 +1871,39 @@ async def modificar_item_inventario(
             print(f"[MODIFICAR-ITEM] Items actualizados: {len(items_actualizados)}")
             
             # Calcular costo total: suma de (costo_unitario * cantidad) de todos los items
+            # IMPORTANTE: Usar costo_unitario, NO precio_unitario
             costo_total = 0.0
-            for item in items_actualizados:
-                costo_unit = item.get("costo_unitario", 0)
-                cantidad_item = item.get("cantidad", 0)
-                costo_total += costo_unit * cantidad_item
+            print(f"[MODIFICAR-ITEM] Calculando costo total del inventario:")
+            for idx, item in enumerate(items_actualizados):
+                costo_unit = item.get("costo_unitario", 0) or 0
+                cantidad_item = item.get("cantidad", 0) or 0
+                item_costo = costo_unit * cantidad_item
+                costo_total += item_costo
+                if idx < 5:  # Log primeros 5 items para debugging
+                    print(f"[MODIFICAR-ITEM]   Item {idx}: cantidad={cantidad_item}, costo_unitario={costo_unit}, costo_item={item_costo}")
             
-            print(f"[MODIFICAR-ITEM] Costo total calculado: {costo_total}")
+            print(f"[MODIFICAR-ITEM] Costo total calculado: {costo_total} (suma de cantidad × costo_unitario)")
+            print(f"[MODIFICAR-ITEM] NOTA: Se usa costo_unitario, NO precio_unitario para el cálculo")
             
             # Actualizar el costo total del inventario
+            # IMPORTANTE: Guardar en campo "costo", NO "precio"
             print(f"[MODIFICAR-ITEM] Paso 9: Actualizando costo total del inventario")
+            print(f"[MODIFICAR-ITEM] Guardando costo_total={costo_total} en campo 'costo' del inventario")
             result_costo = await collection.update_one(
                 {"_id": ObjectId(inventario_id)},
                 {"$set": {"costo": costo_total}}
             )
-            print(f"[MODIFICAR-ITEM] Costo total actualizado: modified_count={result_costo.modified_count}")
+            print(f"[MODIFICAR-ITEM] Costo total actualizado en MongoDB:")
+            print(f"[MODIFICAR-ITEM]   - matched_count: {result_costo.matched_count}")
+            print(f"[MODIFICAR-ITEM]   - modified_count: {result_costo.modified_count}")
+            
+            # Verificar que se guardó correctamente
+            if result_costo.matched_count == 0:
+                print(f"[MODIFICAR-ITEM] ERROR: No se encontró el inventario para actualizar costo")
+            elif result_costo.modified_count > 0:
+                print(f"[MODIFICAR-ITEM] ✅ Costo total guardado exitosamente en MongoDB")
+            else:
+                print(f"[MODIFICAR-ITEM] INFO: Costo total no cambió (ya tenía ese valor)")
             
             # Obtener el item actualizado para retornarlo
             print(f"[MODIFICAR-ITEM] Paso 10: Obteniendo item actualizado para respuesta")
