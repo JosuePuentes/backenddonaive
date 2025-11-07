@@ -289,11 +289,15 @@ async def obtener_usuario_actual(usuario: dict = Depends(get_current_user)):
         )
 
 @router.post("/admin/reset-password")
-async def reset_admin_password(data: dict = Body(default={})):
+async def reset_admin_password(data: Optional[dict] = Body(default=None)):
     """
     Endpoint para cambiar la contraseña del admin.
     Si no se proporciona password, usa 'donaiveadmin' por defecto.
     Este endpoint es temporal para reseteo de contraseñas.
+    
+    Ejemplo de uso:
+    - POST /admin/reset-password (sin body) -> usa 'donaiveadmin'
+    - POST /admin/reset-password {"password": "nueva123"} -> usa 'nueva123'
     """
     try:
         from app.core.auth import hashear_contraseña
@@ -302,7 +306,10 @@ async def reset_admin_password(data: dict = Body(default={})):
         correo_admin = "admin@gmail.com"
         
         # Usar password proporcionado o 'donaiveadmin' por defecto
-        password = data.get("password") if data else None
+        password = None
+        if data and isinstance(data, dict):
+            password = data.get("password")
+        
         if not password:
             password = "donaiveadmin"
             print(f"[RESET-PASSWORD] No se proporcionó password, usando por defecto: {password}")
