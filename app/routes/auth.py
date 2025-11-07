@@ -289,37 +289,59 @@ async def obtener_usuario_actual(usuario: dict = Depends(get_current_user)):
         )
 
 @router.post("/admin/reset-password")
-async def reset_admin_password(data: dict = Body(...)):
+async def reset_admin_password(data: dict = Body(default={})):
     """
     Endpoint para cambiar la contraseña del admin.
+    Si no se proporciona password, usa 'donaiveadmin' por defecto.
     Este endpoint es temporal para reseteo de contraseñas.
     """
     try:
         from app.core.auth import hashear_contraseña
         
-        password = data.get("password")
-        if not password:
-            raise HTTPException(status_code=400, detail="La contraseña es requerida")
-        
         usuarios_collection = get_collection("USUARIOS")
+        correo_admin = "admin@gmail.com"
+        
+        # Usar password proporcionado o 'donaiveadmin' por defecto
+        password = data.get("password") if data else None
+        if not password:
+            password = "donaiveadmin"
+            print(f"[RESET-PASSWORD] No se proporcionó password, usando por defecto: {password}")
+        
+        # Verificar que el usuario admin existe
+        usuario = await usuarios_collection.find_one({"correo": correo_admin})
+        if not usuario:
+            print(f"[RESET-PASSWORD] ERROR: Usuario {correo_admin} no encontrado")
+            raise HTTPException(status_code=404, detail=f"No se encontró el usuario {correo_admin}")
+        
+        print(f"[RESET-PASSWORD] Cambiando contraseña para {correo_admin} a: {password}")
         
         # Buscar y actualizar el usuario admin
         hashed_password = hashear_contraseña(password)
         result = await usuarios_collection.update_one(
-            {"correo": "admin@gmail.com"},
+            {"correo": correo_admin},
             {"$set": {"contraseña": hashed_password}}
         )
         
         if result.modified_count == 0:
-            raise HTTPException(status_code=404, detail="No se encontró el usuario admin o no se realizaron cambios")
+            return {
+                "message": "La contraseña no se modificó (puede que ya sea la misma)",
+                "correo": correo_admin,
+                "nueva_contraseña": password
+            }
         
+        print(f"[RESET-PASSWORD] Contraseña actualizada exitosamente para {correo_admin}")
         return {
             "message": "Contraseña actualizada exitosamente",
-            "correo": "admin@gmail.com",
+            "correo": correo_admin,
             "nueva_contraseña": password
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"[RESET-PASSWORD] ERROR: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error al cambiar la contraseña: {str(e)}")
 
 
