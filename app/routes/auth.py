@@ -322,6 +322,97 @@ async def reset_admin_password(data: dict = Body(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al cambiar la contraseña: {str(e)}")
 
+
+@router.post("/admin/reset-password-donaiveadmin")
+async def reset_admin_password_donaiveadmin():
+    """
+    Endpoint de emergencia para resetear la contraseña del admin a 'donaiveadmin'.
+    ⚠️ SOLO PARA USO TEMPORAL
+    """
+    try:
+        from app.core.auth import hashear_contraseña
+        
+        usuarios_collection = get_collection("USUARIOS")
+        correo_admin = "admin@gmail.com"
+        
+        # Verificar que el usuario admin existe
+        usuario = await usuarios_collection.find_one({"correo": correo_admin})
+        if not usuario:
+            # Crear usuario admin si no existe
+            print(f"[RESET-PASSWORD] Usuario admin no encontrado, creando nuevo usuario...")
+            nueva_contraseña = "donaiveadmin"
+            contraseña_hash = hashear_contraseña(nueva_contraseña)
+            
+            nuevo_usuario = {
+                "correo": correo_admin,
+                "contraseña": contraseña_hash,
+                "permisos": [
+                    "ver_inicio",
+                    "ver_about",
+                    "agregar_cuadre",
+                    "ver_cuadres_dia",
+                    "verificar_cuadres",
+                    "editar_cuadre",
+                    "eliminar_cuadre",
+                    "agregar_gasto",
+                    "ver_gastos",
+                    "verificar_gastos",
+                    "editar_gasto",
+                    "eliminar_gasto",
+                    "ver_inventario",
+                    "agregar_inventario",
+                    "editar_inventario",
+                    "eliminar_inventario",
+                    "ver_usuarios",
+                    "crear_usuarios",
+                    "editar_usuarios",
+                    "eliminar_usuarios",
+                    "admin_completo",
+                    "ver_reportes",
+                    "configurar_sistema",
+                    "gestionar_clientes"
+                ],
+                "farmacias": {}
+            }
+            
+            result = await usuarios_collection.insert_one(nuevo_usuario)
+            return {
+                "message": "Usuario admin creado exitosamente",
+                "correo": correo_admin,
+                "nueva_contraseña": nueva_contraseña,
+                "usuario_creado": True
+            }
+        
+        # Resetear contraseña
+        nueva_contraseña = "donaiveadmin"
+        contraseña_hash = hashear_contraseña(nueva_contraseña)
+        
+        print(f"[RESET-PASSWORD] Reseteando contraseña para {correo_admin}")
+        
+        result = await usuarios_collection.update_one(
+            {"correo": correo_admin},
+            {"$set": {"contraseña": contraseña_hash}}
+        )
+        
+        if result.modified_count == 0:
+            return {
+                "message": "La contraseña no se modificó (puede que ya sea la misma)",
+                "correo": correo_admin,
+                "nueva_contraseña": nueva_contraseña
+            }
+        
+        return {
+            "message": "Contraseña reseteada exitosamente",
+            "correo": correo_admin,
+            "nueva_contraseña": nueva_contraseña
+        }
+        
+    except Exception as e:
+        print(f"[RESET-PASSWORD] ERROR: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error al resetear la contraseña: {str(e)}")
+
 @router.get("/cuadres")
 async def obtener_cuadres(
     farmacia: Optional[str] = Query(None),
