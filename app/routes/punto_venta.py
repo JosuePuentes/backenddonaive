@@ -972,39 +972,97 @@ async def registrar_venta(
                 detail=f"La suma de métodos de pago (${suma_metodos_usd:.2f} USD) no coincide con el total (${total_usd_calculado:.2f} USD). Verifica que los montos y divisas sean correctos."
             )
         
-        # Validar stock de productos
-        productos_collection = get_collection("PRODUCTOS")
-        try:
-            await productos_collection.find_one({})
-        except:
-            productos_collection = get_collection("INVENTARIOS")
+        # Validar stock de productos en inventarios
+        inventarios_collection = get_collection("INVENTARIOS")
         
-        for item in venta.items:
+        for item_venta in venta.items:
             try:
-                producto = await productos_collection.find_one({"_id": ObjectId(item.producto_id)})
-                if not producto:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Producto {item.producto_id} no encontrado"
-                    )
+                codigo_producto = item_venta.codigo
+                if not codigo_producto:
+                    # Si no hay código, intentar obtenerlo del producto
+                    try:
+                        productos_collection = get_collection("PRODUCTOS")
+                        producto = await productos_collection.find_one({"_id": ObjectId(item_venta.producto_id)})
+                        if producto:
+                            codigo_producto = producto.get("codigo")
+                    except:
+                        pass
                 
-                # Verificar stock
-                stock = producto.get("stock", 0)
+                if not codigo_producto:
+                    print(f"[REGISTRAR-VENTA] Advertencia: No se encontró código para producto {item_venta.producto_id}")
+                    # Continuar sin validar stock si no hay código (se validará más adelante)
+                    continue
+                
+                cantidad_solicitada = item_venta.cantidad
+                stock_disponible = 0
+                
+                # Buscar el item en inventarios activos de la sucursal
                 if venta.sucursal:
-                    stock_sucursal = producto.get("stock_sucursal", {})
-                    if isinstance(stock_sucursal, dict):
-                        stock = stock_sucursal.get(venta.sucursal, stock)
+                    inventarios = await inventarios_collection.find({
+                        "sucursal": venta.sucursal,
+                        "estado": "activo"
+                    }).sort("fecha_creacion", -1).to_list(length=50)
+                    
+                    # Buscar el item en los inventarios
+                    item_encontrado = None
+                    
+                    for inventario in inventarios:
+                        items = inventario.get("items", []) or inventario.get("items_inventario", [])
+                        for item in items:
+                            item_codigo = item.get("codigo")
+                            if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                                item_encontrado = item
+                                break
+                        if item_encontrado:
+                            break
+                    
+                    if item_encontrado:
+                        # Calcular stock disponible (suma de lotes si existen, o cantidad del item)
+                        lotes = item_encontrado.get("lotes", [])
+                        
+                        if lotes:
+                            # Sumar cantidades de lotes
+                            for lote in lotes:
+                                stock_disponible += lote.get("cantidad", 0) or 0
+                        else:
+                            # Si no hay lotes, usar cantidad del item
+                            stock_disponible = item_encontrado.get("cantidad", 0) or 0
+                        
+                        print(f"[REGISTRAR-VENTA] Stock encontrado para {codigo_producto}: {stock_disponible} (lotes: {len(lotes) if lotes else 0})")
+                    else:
+                        print(f"[REGISTRAR-VENTA] Advertencia: No se encontró item con código {codigo_producto} en inventarios de sucursal {venta.sucursal}")
+                        # Si no se encuentra en inventarios, intentar buscar en PRODUCTOS como fallback
+                        try:
+                            productos_collection = get_collection("PRODUCTOS")
+                            producto = await productos_collection.find_one({"_id": ObjectId(item_venta.producto_id)})
+                            if producto:
+                                stock_disponible = producto.get("stock", 0)
+                                if venta.sucursal:
+                                    stock_sucursal = producto.get("stock_sucursal", {})
+                                    if isinstance(stock_sucursal, dict):
+                                        stock_disponible = stock_sucursal.get(venta.sucursal, stock_disponible)
+                        except:
+                            pass
                 
-                if stock < item.cantidad:
+                # Validar stock
+                if stock_disponible < cantidad_solicitada:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Stock insuficiente para {item.nombre}. Stock disponible: {stock}, solicitado: {item.cantidad}"
+                        detail=f"Stock insuficiente para {item_venta.nombre} (código: {codigo_producto}). Stock disponible: {stock_disponible}, solicitado: {cantidad_solicitada}"
                     )
+                
+            except HTTPException:
+                raise
             except InvalidId:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"ID de producto inválido: {item.producto_id}"
+                    detail=f"ID de producto inválido: {item_venta.producto_id}"
                 )
+            except Exception as e:
+                print(f"[REGISTRAR-VENTA] Error al validar stock para {item_venta.nombre}: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+                # Continuar con la validación para otros items
         
         # Generar número de factura
         ventas_collection = get_collection("VENTAS")
