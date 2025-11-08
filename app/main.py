@@ -60,6 +60,7 @@ try:
     from bson import ObjectId
     from bson.errors import InvalidId
     from typing import List
+    from datetime import datetime
     
     # ===== ENDPOINTS DE USUARIOS DIRECTOS =====
     
@@ -453,6 +454,125 @@ try:
             raise HTTPException(
                 status_code=500,
                 detail=f"Error al obtener bancos: {str(e)}"
+            )
+
+    # Endpoint para crear un banco
+    @app.post("/bancos")
+    async def crear_banco(
+        data: dict = Body(...),
+        usuario: dict = Depends(get_current_user)
+    ):
+        """
+        Crea un nuevo banco.
+        Requiere autenticación.
+        
+        Estructura de request esperada:
+        {
+          "numero_cuenta": "...",
+          "nombre_banco": "...",
+          "nombre_titular": "...",
+          "saldo": 0.0,  // opcional, por defecto 0
+          "divisa": "USD",  // opcional, por defecto "USD"
+          "activo": true  // opcional, por defecto true
+        }
+        
+        Estructura de respuesta:
+        {
+          "_id": "...",
+          "numero_cuenta": "...",
+          "nombre_banco": "...",
+          "nombre_titular": "...",
+          "saldo": 0.0,
+          "divisa": "USD",
+          "activo": true
+        }
+        """
+        try:
+            # Validar campos requeridos
+            numero_cuenta = data.get("numero_cuenta") or data.get("numeroCuenta")
+            nombre_banco = data.get("nombre_banco") or data.get("nombreBanco") or data.get("nombre")
+            nombre_titular = data.get("nombre_titular") or data.get("nombreTitular")
+            
+            if not numero_cuenta:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El campo 'numero_cuenta' es requerido"
+                )
+            
+            if not nombre_banco:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El campo 'nombre_banco' es requerido"
+                )
+            
+            if not nombre_titular:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El campo 'nombre_titular' es requerido"
+                )
+            
+            # Obtener valores opcionales con defaults
+            saldo = float(data.get("saldo", 0) or 0)
+            divisa = data.get("divisa", "USD")
+            activo = data.get("activo", True)
+            
+            # Validar que divisa sea USD o BS
+            if divisa not in ["USD", "BS"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El campo 'divisa' debe ser 'USD' o 'BS'"
+                )
+            
+            # Verificar si ya existe un banco con el mismo número de cuenta
+            bancos_collection = get_collection("BANCOS")
+            banco_existente = await bancos_collection.find_one({
+                "numero_cuenta": numero_cuenta
+            })
+            
+            if banco_existente:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Ya existe un banco con el número de cuenta {numero_cuenta}"
+                )
+            
+            # Crear documento del banco
+            nuevo_banco = {
+                "numero_cuenta": numero_cuenta,
+                "nombre_banco": nombre_banco,
+                "nombre_titular": nombre_titular,
+                "saldo": saldo,
+                "divisa": divisa,
+                "activo": activo,
+                "fecha_creacion": datetime.now().isoformat(),
+                "usuario_creacion": usuario.get("correo", usuario.get("usuarioCorreo", ""))
+            }
+            
+            # Insertar en la base de datos
+            resultado = await bancos_collection.insert_one(nuevo_banco)
+            banco_id = str(resultado.inserted_id)
+            
+            print(f"[CREAR-BANCO] Banco creado con ID: {banco_id}, número de cuenta: {numero_cuenta}")
+            
+            # Retornar el banco creado
+            return {
+                "_id": banco_id,
+                "numero_cuenta": numero_cuenta,
+                "nombre_banco": nombre_banco,
+                "nombre_titular": nombre_titular,
+                "saldo": saldo,
+                "divisa": divisa,
+                "activo": activo
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[CREAR-BANCO] Error: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al crear banco: {str(e)}"
             )
 
     # Registrar routers
