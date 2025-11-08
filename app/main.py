@@ -395,76 +395,57 @@ try:
     async def obtener_bancos(usuario: dict = Depends(get_current_user)):
         """
         Obtiene la lista de bancos disponibles.
-        Busca en la colección BANCOS o extrae bancos únicos de puntos de venta en cuadres.
+        Retorna solo bancos activos (activo: true).
         Requiere autenticación.
+        
+        Estructura de respuesta esperada por el frontend:
+        {
+          "bancos": [
+            {
+              "_id": "...",
+              "numero_cuenta": "...",
+              "nombre_banco": "...",
+              "nombre_titular": "...",
+              "saldo": 0.0,
+              "divisa": "USD",
+              "activo": true
+            }
+          ]
+        }
         """
         try:
             # Intentar obtener desde colección BANCOS
             try:
                 bancos_collection = get_collection("BANCOS")
-                bancos = await bancos_collection.find({}).to_list(length=None)
+                # Filtrar solo bancos activos
+                bancos = await bancos_collection.find({"activo": True}).to_list(length=None)
+                
                 if bancos and len(bancos) > 0:
                     resultado = []
                     for banco in bancos:
                         banco_dict = {
-                            "id": str(banco.get("_id", "")),
-                            "nombre": banco.get("nombre", banco.get("banco", "")),
-                            "codigo": banco.get("codigo", ""),
+                            "_id": str(banco.get("_id", "")),
+                            "numero_cuenta": banco.get("numero_cuenta", banco.get("numeroCuenta", "")),
+                            "nombre_banco": banco.get("nombre_banco", banco.get("nombreBanco", banco.get("nombre", banco.get("banco", "")))),
+                            "nombre_titular": banco.get("nombre_titular", banco.get("nombreTitular", "")),
+                            "saldo": float(banco.get("saldo", 0) or 0),
+                            "divisa": banco.get("divisa", "USD"),
                             "activo": banco.get("activo", True)
                         }
-                        # Agregar otros campos si existen
-                        if "descripcion" in banco:
-                            banco_dict["descripcion"] = banco.get("descripcion")
                         resultado.append(banco_dict)
-                    print(f"[OBTENER-BANCOS] Encontrados {len(resultado)} bancos en colección BANCOS")
+                    
+                    print(f"[OBTENER-BANCOS] Encontrados {len(resultado)} bancos activos en colección BANCOS")
                     return {"bancos": resultado}
             except Exception as e:
-                print(f"[OBTENER-BANCOS] No se encontró colección BANCOS: {str(e)}")
+                print(f"[OBTENER-BANCOS] No se encontró colección BANCOS o error al buscar: {str(e)}")
             
-            # Si no hay colección BANCOS, extraer bancos únicos de puntos de venta en cuadres
-            bancos_unicos = set()
-            try:
-                db = get_collection("CUADRES").database
-                colecciones = [f"CUADRES-0{i}" for i in range(1, 8)]
-                
-                for nombre_coleccion in colecciones:
-                    try:
-                        collection = db[nombre_coleccion]
-                        cuadres = await collection.find({}).to_list(length=100)  # Limitar para rendimiento
-                        
-                        for cuadre in cuadres:
-                            puntos_venta = cuadre.get("puntosVenta", [])
-                            if isinstance(puntos_venta, list):
-                                for punto in puntos_venta:
-                                    banco = punto.get("banco")
-                                    if banco and isinstance(banco, str):
-                                        bancos_unicos.add(banco.strip())
-                    except Exception as e:
-                        print(f"[OBTENER-BANCOS] Error al buscar en {nombre_coleccion}: {str(e)}")
-                        continue
-                
-                # Convertir a lista ordenada
-                resultado = [{"id": str(i), "nombre": banco, "codigo": "", "activo": True} 
-                          for i, banco in enumerate(sorted(bancos_unicos), 1)]
-                
-                print(f"[OBTENER-BANCOS] Encontrados {len(resultado)} bancos únicos de cuadres")
-                return {"bancos": resultado}
-                
-            except Exception as e:
-                print(f"[OBTENER-BANCOS] Error al extraer bancos de cuadres: {str(e)}")
+            # Si no hay colección BANCOS o está vacía, retornar lista vacía
+            # El frontend manejará la lista vacía
+            print(f"[OBTENER-BANCOS] No se encontraron bancos, retornando lista vacía")
+            return {"bancos": []}
             
-            # Si no se encuentran bancos, retornar lista vacía o lista por defecto
-            bancos_por_defecto = [
-                {"id": "1", "nombre": "Banco de Venezuela", "codigo": "BDV", "activo": True},
-                {"id": "2", "nombre": "Banco Mercantil", "codigo": "MER", "activo": True},
-                {"id": "3", "nombre": "Banco Provincial", "codigo": "PRO", "activo": True},
-                {"id": "4", "nombre": "Banesco", "codigo": "BAN", "activo": True},
-                {"id": "5", "nombre": "Banco del Tesoro", "codigo": "BTE", "activo": True}
-            ]
-            
-            print(f"[OBTENER-BANCOS] Retornando bancos por defecto")
-            return {"bancos": bancos_por_defecto}
-            
+        except HTTPException:
+            raise
         except Exception as e:
             print(f"[OBTENER-BANCOS] Error: {str(e)}")
             import traceback
