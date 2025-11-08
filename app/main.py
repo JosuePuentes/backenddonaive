@@ -431,7 +431,8 @@ try:
                             "nombre_titular": banco.get("nombre_titular", banco.get("nombreTitular", "")),
                             "saldo": float(banco.get("saldo", 0) or 0),
                             "divisa": banco.get("divisa", "USD"),
-                            "activo": banco.get("activo", True)
+                            "activo": banco.get("activo", True),
+                            "tipo_metodo": banco.get("tipo_metodo", "pago_movil")  # Valor por defecto si no existe
                         }
                         resultado.append(banco_dict)
                     
@@ -524,12 +525,21 @@ try:
             saldo = float(data.get("saldo", 0) or 0)
             divisa = data.get("divisa", "USD")
             activo = data.get("activo", True)
+            tipo_metodo = data.get("tipo_metodo", "pago_movil")
             
             # Validar que divisa sea USD o BS
             if divisa not in ["USD", "BS"]:
                 raise HTTPException(
                     status_code=400,
                     detail="El campo 'divisa' debe ser 'USD' o 'BS'"
+                )
+            
+            # Validar que tipo_metodo sea uno de los valores permitidos
+            tipos_metodo_permitidos = ["pago_movil", "efectivo", "zelle", "tarjeta_debit", "tarjeta_credito", "vales"]
+            if tipo_metodo not in tipos_metodo_permitidos:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El campo 'tipo_metodo' debe ser uno de: {', '.join(tipos_metodo_permitidos)}"
                 )
             
             # Verificar si ya existe un banco con el mismo número de cuenta
@@ -552,6 +562,7 @@ try:
                 "saldo": saldo,
                 "divisa": divisa,
                 "activo": activo,
+                "tipo_metodo": tipo_metodo,
                 "fecha_creacion": datetime.now().isoformat(),
                 "usuario_creacion": usuario.get("correo", usuario.get("usuarioCorreo", ""))
             }
@@ -570,7 +581,8 @@ try:
                 "nombre_titular": nombre_titular,
                 "saldo": saldo,
                 "divisa": divisa,
-                "activo": activo
+                "activo": activo,
+                "tipo_metodo": tipo_metodo
             }
             
         except HTTPException:
@@ -699,6 +711,168 @@ try:
             raise HTTPException(
                 status_code=500,
                 detail=f"Error al obtener movimientos del banco: {str(e)}"
+            )
+
+    # Endpoint para actualizar un banco
+    @app.put("/bancos/{banco_id}")
+    async def actualizar_banco(
+        banco_id: str,
+        data: dict = Body(...),
+        usuario: dict = Depends(get_current_user)
+    ):
+        """
+        Actualiza un banco existente.
+        Requiere autenticación.
+        
+        Estructura de request esperada:
+        {
+          "numero_cuenta": "...",  // opcional
+          "nombre_banco": "...",  // opcional
+          "nombre_titular": "...",  // opcional
+          "saldo": 0.0,  // opcional
+          "divisa": "USD",  // opcional
+          "activo": true,  // opcional
+          "tipo_metodo": "pago_movil"  // opcional
+        }
+        
+        Estructura de respuesta:
+        {
+          "_id": "...",
+          "numero_cuenta": "...",
+          "nombre_banco": "...",
+          "nombre_titular": "...",
+          "saldo": 0.0,
+          "divisa": "USD",
+          "activo": true,
+          "tipo_metodo": "pago_movil"
+        }
+        """
+        try:
+            # Validar ID de banco
+            try:
+                banco_oid = ObjectId(banco_id)
+            except InvalidId:
+                raise HTTPException(
+                    status_code=400,
+                    detail="ID de banco inválido"
+                )
+            
+            # Verificar que el banco existe
+            bancos_collection = get_collection("BANCOS")
+            banco_existente = await bancos_collection.find_one({"_id": banco_oid})
+            if not banco_existente:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Banco no encontrado"
+                )
+            
+            # Preparar datos de actualización
+            update_data = {}
+            
+            # Campos opcionales que se pueden actualizar
+            if "numero_cuenta" in data:
+                numero_cuenta = data.get("numero_cuenta") or data.get("numeroCuenta")
+                if numero_cuenta:
+                    # Verificar que no exista otro banco con el mismo número de cuenta
+                    banco_duplicado = await bancos_collection.find_one({
+                        "numero_cuenta": numero_cuenta,
+                        "_id": {"$ne": banco_oid}
+                    })
+                    if banco_duplicado:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Ya existe otro banco con el número de cuenta {numero_cuenta}"
+                        )
+                    update_data["numero_cuenta"] = numero_cuenta
+            
+            if "nombre_banco" in data:
+                nombre_banco = data.get("nombre_banco") or data.get("nombreBanco") or data.get("nombre")
+                if nombre_banco:
+                    update_data["nombre_banco"] = nombre_banco
+            
+            if "nombre_titular" in data:
+                nombre_titular = data.get("nombre_titular") or data.get("nombreTitular")
+                if nombre_titular:
+                    update_data["nombre_titular"] = nombre_titular
+            
+            if "saldo" in data:
+                saldo = data.get("saldo")
+                if saldo is not None:
+                    update_data["saldo"] = float(saldo)
+            
+            if "divisa" in data:
+                divisa = data.get("divisa")
+                if divisa:
+                    if divisa not in ["USD", "BS"]:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="El campo 'divisa' debe ser 'USD' o 'BS'"
+                        )
+                    update_data["divisa"] = divisa
+            
+            if "activo" in data:
+                activo = data.get("activo")
+                if activo is not None:
+                    update_data["activo"] = bool(activo)
+            
+            if "tipo_metodo" in data:
+                tipo_metodo = data.get("tipo_metodo")
+                if tipo_metodo:
+                    tipos_metodo_permitidos = ["pago_movil", "efectivo", "zelle", "tarjeta_debit", "tarjeta_credito", "vales"]
+                    if tipo_metodo not in tipos_metodo_permitidos:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"El campo 'tipo_metodo' debe ser uno de: {', '.join(tipos_metodo_permitidos)}"
+                        )
+                    update_data["tipo_metodo"] = tipo_metodo
+            
+            # Si no hay nada que actualizar
+            if not update_data:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No se proporcionaron campos para actualizar"
+                )
+            
+            # Agregar fecha de actualización
+            update_data["fecha_actualizacion"] = datetime.now().isoformat()
+            update_data["usuario_actualizacion"] = usuario.get("correo", usuario.get("usuarioCorreo", ""))
+            
+            # Actualizar banco
+            result = await bancos_collection.update_one(
+                {"_id": banco_oid},
+                {"$set": update_data}
+            )
+            
+            if result.matched_count == 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Banco no encontrado"
+                )
+            
+            # Obtener banco actualizado
+            banco_actualizado = await bancos_collection.find_one({"_id": banco_oid})
+            
+            # Retornar el banco actualizado
+            return {
+                "_id": str(banco_actualizado.get("_id", "")),
+                "numero_cuenta": banco_actualizado.get("numero_cuenta", ""),
+                "nombre_banco": banco_actualizado.get("nombre_banco", banco_actualizado.get("nombreBanco", "")),
+                "nombre_titular": banco_actualizado.get("nombre_titular", banco_actualizado.get("nombreTitular", "")),
+                "saldo": float(banco_actualizado.get("saldo", 0) or 0),
+                "divisa": banco_actualizado.get("divisa", "USD"),
+                "activo": banco_actualizado.get("activo", True),
+                "tipo_metodo": banco_actualizado.get("tipo_metodo", "pago_movil")
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[ACTUALIZAR-BANCO] Error: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al actualizar banco: {str(e)}"
             )
 
     # Registrar routers
