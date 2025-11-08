@@ -1540,6 +1540,249 @@ async def registrar_venta(
         )
 
 
+@router.get("/ventas/resumen")
+async def obtener_resumen_ventas(
+    fecha_inicio: str = Query(..., description="Fecha de inicio en formato YYYY-MM-DD"),
+    fecha_fin: str = Query(..., description="Fecha de fin en formato YYYY-MM-DD"),
+    sucursal: Optional[str] = Query(None, description="ID de la sucursal (opcional)"),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Obtiene un resumen de ventas por sucursal con desglose de métodos de pago.
+    Requiere autenticación.
+    
+    Clasifica métodos de pago según tipo_metodo del banco:
+    - Efectivo USD: bancos con tipo_metodo == "efectivo" en USD
+    - Zelle USD: bancos con tipo_metodo == "zelle" en USD
+    - Vales USD: bancos con tipo_metodo == "vales" en USD
+    - Pago Móvil Bs: bancos con tipo_metodo == "pago_movil" en Bs
+    - Efectivo Bs: bancos con tipo_metodo == "efectivo" en Bs
+    - Tarjeta Débito Bs: bancos con tipo_metodo == "tarjeta_debit" en Bs
+    - Tarjeta Crédito Bs: bancos con tipo_metodo == "tarjeta_credito" en Bs
+    """
+    try:
+        # Validar formato de fechas
+        try:
+            datetime.strptime(fecha_inicio, "%Y-%m-%d")
+            datetime.strptime(fecha_fin, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Formato de fecha inválido. Use YYYY-MM-DD"
+            )
+        
+        # Obtener colecciones
+        ventas_collection = get_collection("VENTAS")
+        bancos_collection = get_collection("BANCOS")
+        inventarios_collection = get_collection("INVENTARIOS")
+        
+        # Construir filtro de fechas
+        filtro = {
+            "$or": [
+                {"fecha": {"$gte": fecha_inicio, "$lte": fecha_fin}},
+                {"fecha_hora": {"$gte": fecha_inicio, "$lte": fecha_fin + "T23:59:59"}}
+            ]
+        }
+        
+        # Si se especifica sucursal, agregar al filtro
+        if sucursal:
+            filtro["sucursal"] = sucursal
+        
+        # Buscar ventas
+        ventas = await ventas_collection.find(filtro).to_list(length=None)
+        
+        print(f"[RESUMEN-VENTAS] Encontradas {len(ventas)} ventas para rango {fecha_inicio} - {fecha_fin}")
+        
+        # Estructura para acumular datos por sucursal
+        resumen_por_sucursal = {}
+        
+        # Procesar cada venta
+        for venta in ventas:
+            sucursal_id = venta.get("sucursal", "sin_sucursal")
+            
+            # Inicializar sucursal si no existe
+            if sucursal_id not in resumen_por_sucursal:
+                resumen_por_sucursal[sucursal_id] = {
+                    "total_efectivo_usd": 0.0,
+                    "total_zelle_usd": 0.0,
+                    "total_usd_recibido": 0.0,
+                    "total_vales_usd": 0.0,
+                    "total_bs": 0.0,
+                    "desglose_bs": {
+                        "pago_movil": 0.0,
+                        "efectivo": 0.0,
+                        "tarjeta_debit": 0.0,
+                        "tarjeta_credito": 0.0,
+                        "recargas": 0.0,
+                        "devoluciones": 0.0
+                    },
+                    "total_costo_inventario": 0.0,
+                    "total_ventas": 0
+                }
+            
+            resumen = resumen_por_sucursal[sucursal_id]
+            resumen["total_ventas"] += 1
+            
+            # Procesar métodos de pago
+            metodos_pago = venta.get("metodos_pago", [])
+            tasa_dia = venta.get("tasa_dia", 1)
+            
+            for metodo in metodos_pago:
+                tipo = metodo.get("tipo", "").lower()
+                monto = float(metodo.get("monto", 0) or 0)
+                divisa = metodo.get("divisa", "BS").upper()
+                banco_id = metodo.get("banco_id")
+                
+                # Si es devolución (monto negativo)
+                if monto < 0:
+                    monto_abs = abs(monto)
+                    if divisa == "BS":
+                        resumen["desglose_bs"]["devoluciones"] += monto_abs
+                    continue
+                
+                # Si es tipo "banco" y tiene banco_id, buscar tipo_metodo del banco
+                if tipo == "banco" and banco_id:
+                    try:
+                        banco_oid = ObjectId(banco_id)
+                        banco = await bancos_collection.find_one({"_id": banco_oid})
+                        
+                        if banco:
+                            tipo_metodo = banco.get("tipo_metodo", "pago_movil")
+                            
+                            # Clasificar según tipo_metodo y divisa
+                            if divisa == "USD":
+                                if tipo_metodo == "efectivo":
+                                    resumen["total_efectivo_usd"] += monto
+                                    resumen["total_usd_recibido"] += monto
+                                elif tipo_metodo == "zelle":
+                                    resumen["total_zelle_usd"] += monto
+                                    resumen["total_usd_recibido"] += monto
+                                elif tipo_metodo == "vales":
+                                    resumen["total_vales_usd"] += monto
+                                    resumen["total_usd_recibido"] += monto
+                            else:  # BS
+                                if tipo_metodo == "pago_movil":
+                                    resumen["desglose_bs"]["pago_movil"] += monto
+                                    resumen["total_bs"] += monto
+                                elif tipo_metodo == "efectivo":
+                                    resumen["desglose_bs"]["efectivo"] += monto
+                                    resumen["total_bs"] += monto
+                                elif tipo_metodo == "tarjeta_debit":
+                                    resumen["desglose_bs"]["tarjeta_debit"] += monto
+                                    resumen["total_bs"] += monto
+                                elif tipo_metodo == "tarjeta_credito":
+                                    resumen["desglose_bs"]["tarjeta_credito"] += monto
+                                    resumen["total_bs"] += monto
+                                elif tipo_metodo == "recargas":
+                                    resumen["desglose_bs"]["recargas"] += monto
+                                    resumen["total_bs"] += monto
+                    except (InvalidId, ValueError):
+                        # Si el banco_id no es válido, tratar como método de pago genérico
+                        if divisa == "BS":
+                            resumen["total_bs"] += monto
+                        elif divisa == "USD":
+                            resumen["total_usd_recibido"] += monto
+                else:
+                    # Métodos de pago tradicionales (sin banco_id)
+                    if tipo == "efectivo":
+                        if divisa == "USD":
+                            resumen["total_efectivo_usd"] += monto
+                            resumen["total_usd_recibido"] += monto
+                        else:  # BS
+                            resumen["desglose_bs"]["efectivo"] += monto
+                            resumen["total_bs"] += monto
+                    elif tipo == "zelle":
+                        if divisa == "USD":
+                            resumen["total_zelle_usd"] += monto
+                            resumen["total_usd_recibido"] += monto
+                    elif tipo == "transferencia":
+                        if divisa == "BS":
+                            resumen["desglose_bs"]["pago_movil"] += monto
+                            resumen["total_bs"] += monto
+                    elif tipo == "tarjeta":
+                        if divisa == "BS":
+                            # Por defecto, tarjeta se considera débito
+                            resumen["desglose_bs"]["tarjeta_debit"] += monto
+                            resumen["total_bs"] += monto
+                    elif tipo == "vales":
+                        if divisa == "USD":
+                            resumen["total_vales_usd"] += monto
+                            resumen["total_usd_recibido"] += monto
+            
+            # Calcular costo de inventario de los items de esta venta
+            items = venta.get("items", [])
+            for item in items:
+                codigo_producto = item.get("codigo")
+                cantidad = item.get("cantidad", 0) or 0
+                
+                if not codigo_producto or cantidad == 0:
+                    continue
+                
+                # Buscar costo_unitario en inventarios activos de la sucursal
+                try:
+                    if sucursal_id and sucursal_id != "sin_sucursal":
+                        inventarios = await inventarios_collection.find({
+                            "sucursal": sucursal_id,
+                            "estado": "activo"
+                        }).sort("fecha_creacion", -1).to_list(length=10)
+                        
+                        costo_unitario = None
+                        for inventario in inventarios:
+                            items_inv = inventario.get("items", []) or inventario.get("items_inventario", [])
+                            for item_inv in items_inv:
+                                if str(item_inv.get("codigo", "")).strip() == str(codigo_producto).strip():
+                                    costo_unitario = float(item_inv.get("costo_unitario", 0) or 0)
+                                    break
+                            if costo_unitario is not None:
+                                break
+                        
+                        if costo_unitario:
+                            costo_total_item = costo_unitario * cantidad
+                            resumen["total_costo_inventario"] += costo_total_item
+                except Exception as e:
+                    print(f"[RESUMEN-VENTAS] Error al calcular costo para {codigo_producto}: {str(e)}")
+                    continue
+        
+        # Formatear respuesta
+        resultado = {
+            "ventas_por_sucursal": {}
+        }
+        
+        for sucursal_id, datos in resumen_por_sucursal.items():
+            resultado["ventas_por_sucursal"][sucursal_id] = {
+                "total_efectivo_usd": round(datos["total_efectivo_usd"], 2),
+                "total_zelle_usd": round(datos["total_zelle_usd"], 2),
+                "total_usd_recibido": round(datos["total_usd_recibido"], 2),
+                "total_vales_usd": round(datos["total_vales_usd"], 2),
+                "total_bs": round(datos["total_bs"], 2),
+                "desglose_bs": {
+                    "pago_movil": round(datos["desglose_bs"]["pago_movil"], 2),
+                    "efectivo": round(datos["desglose_bs"]["efectivo"], 2),
+                    "tarjeta_debit": round(datos["desglose_bs"]["tarjeta_debit"], 2),
+                    "tarjeta_credito": round(datos["desglose_bs"]["tarjeta_credito"], 2),
+                    "recargas": round(datos["desglose_bs"]["recargas"], 2),
+                    "devoluciones": round(datos["desglose_bs"]["devoluciones"], 2)
+                },
+                "total_costo_inventario": round(datos["total_costo_inventario"], 2),
+                "total_ventas": datos["total_ventas"]
+            }
+        
+        print(f"[RESUMEN-VENTAS] Resumen generado para {len(resultado['ventas_por_sucursal'])} sucursales")
+        
+        return resultado
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[RESUMEN-VENTAS] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener resumen de ventas: {str(e)}"
+        )
+
+
 @router.get("/ventas", response_model=List[VentaResponse])
 async def obtener_ventas_del_dia(
     fecha: str = Query(..., description="Fecha en formato YYYY-MM-DD"),
