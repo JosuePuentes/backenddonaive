@@ -533,9 +533,122 @@ async def agregar_cuadre(farmacia: str, cuadre: Cuadre):
             cuadre_dict["imagenesCuadre"] = imagenes
         if not isinstance(imagenes, list) or not (1 <= len(imagenes) <= 4):
             raise HTTPException(status_code=400, detail="El campo 'imagenesCuadre' debe ser un array de 1 a 3 strings no vacíos.")
-        # ...existing code...
-        result = collection.insert_one(cuadre_dict)
-        return {"message": "Cuadre guardado", "result": str(result)}
+        
+        # Procesar fondoCaja si existe (guardarlo en el cuadre)
+        fondoCaja = cuadre_dict.get("fondoCaja")
+        if fondoCaja:
+            print(f"[AGREGAR-CUADRE] Procesando fondoCaja: {fondoCaja}")
+            # Guardar fondoCaja en el cuadre (ya está en cuadre_dict si viene del request)
+        
+        # Insertar cuadre primero para obtener el ID
+        result = await collection.insert_one(cuadre_dict)
+        cuadre_id = str(result.inserted_id)
+        
+        # Procesar fondoCaja después de insertar el cuadre (para actualizar bancos y crear movimientos)
+        if fondoCaja:
+            # Si hay metodoPagoBs o metodoPagoUsd, restar del saldo del banco y crear movimientos
+            bancos_collection = get_collection("BANCOS")
+            movimientos_collection = get_collection("MOVIMIENTOS_BANCOS")
+            
+            # Procesar metodoPagoBs
+            metodo_pago_bs = fondoCaja.get("metodoPagoBs") if isinstance(fondoCaja, dict) else (fondoCaja.metodoPagoBs if hasattr(fondoCaja, 'metodoPagoBs') else None)
+            efectivo_bs = float(fondoCaja.get("efectivoBs", 0) or 0) if isinstance(fondoCaja, dict) else (float(fondoCaja.efectivoBs) if hasattr(fondoCaja, 'efectivoBs') else 0)
+            
+            if metodo_pago_bs and efectivo_bs > 0:
+                try:
+                    banco_oid = ObjectId(metodo_pago_bs)
+                    banco = await bancos_collection.find_one({"_id": banco_oid})
+                    
+                    if banco:
+                        saldo_actual = float(banco.get("saldo", 0) or 0)
+                        nuevo_saldo = saldo_actual - efectivo_bs
+                        
+                        # Validar que haya saldo suficiente
+                        if nuevo_saldo < 0:
+                            print(f"[AGREGAR-CUADRE] Advertencia: Saldo insuficiente en banco {metodo_pago_bs} para fondo de caja Bs. Saldo: {saldo_actual}, Fondo: {efectivo_bs}")
+                            # No fallar el cuadre, solo registrar el error
+                        else:
+                            # Actualizar saldo del banco
+                            await bancos_collection.update_one(
+                                {"_id": banco_oid},
+                                {"$set": {"saldo": nuevo_saldo}}
+                            )
+                            
+                            # Crear movimiento
+                            movimiento = {
+                                "banco_id": metodo_pago_bs,
+                                "tipo": "fondo_caja",
+                                "monto": -efectivo_bs,  # Negativo para indicar salida
+                                "divisa": "BS",
+                                "cuadre_id": cuadre_id,
+                                "farmacia": farmacia,
+                                "fecha": now_ve.isoformat(),
+                                "descripcion": f"Fondo de caja Bs para cuadre {farmacia}",
+                                "saldo_anterior": saldo_actual,
+                                "saldo_nuevo": nuevo_saldo
+                            }
+                            
+                            await movimientos_collection.insert_one(movimiento)
+                            print(f"[AGREGAR-CUADRE] Fondo de caja Bs procesado: {efectivo_bs} Bs del banco {metodo_pago_bs}")
+                    else:
+                        print(f"[AGREGAR-CUADRE] Advertencia: Banco no encontrado para metodoPagoBs: {metodo_pago_bs}")
+                except (InvalidId, ValueError) as e:
+                    print(f"[AGREGAR-CUADRE] Error al procesar metodoPagoBs: {str(e)}")
+                except Exception as e:
+                    print(f"[AGREGAR-CUADRE] Error al actualizar banco para metodoPagoBs: {str(e)}")
+                    import traceback
+                    print(traceback.format_exc())
+            
+            # Procesar metodoPagoUsd
+            metodo_pago_usd = fondoCaja.get("metodoPagoUsd") if isinstance(fondoCaja, dict) else (fondoCaja.metodoPagoUsd if hasattr(fondoCaja, 'metodoPagoUsd') else None)
+            efectivo_usd = float(fondoCaja.get("efectivoUsd", 0) or 0) if isinstance(fondoCaja, dict) else (float(fondoCaja.efectivoUsd) if hasattr(fondoCaja, 'efectivoUsd') else 0)
+            
+            if metodo_pago_usd and efectivo_usd > 0:
+                try:
+                    banco_oid = ObjectId(metodo_pago_usd)
+                    banco = await bancos_collection.find_one({"_id": banco_oid})
+                    
+                    if banco:
+                        saldo_actual = float(banco.get("saldo", 0) or 0)
+                        nuevo_saldo = saldo_actual - efectivo_usd
+                        
+                        # Validar que haya saldo suficiente
+                        if nuevo_saldo < 0:
+                            print(f"[AGREGAR-CUADRE] Advertencia: Saldo insuficiente en banco {metodo_pago_usd} para fondo de caja USD. Saldo: {saldo_actual}, Fondo: {efectivo_usd}")
+                            # No fallar el cuadre, solo registrar el error
+                        else:
+                            # Actualizar saldo del banco
+                            await bancos_collection.update_one(
+                                {"_id": banco_oid},
+                                {"$set": {"saldo": nuevo_saldo}}
+                            )
+                            
+                            # Crear movimiento
+                            movimiento = {
+                                "banco_id": metodo_pago_usd,
+                                "tipo": "fondo_caja",
+                                "monto": -efectivo_usd,  # Negativo para indicar salida
+                                "divisa": "USD",
+                                "cuadre_id": cuadre_id,
+                                "farmacia": farmacia,
+                                "fecha": now_ve.isoformat(),
+                                "descripcion": f"Fondo de caja USD para cuadre {farmacia}",
+                                "saldo_anterior": saldo_actual,
+                                "saldo_nuevo": nuevo_saldo
+                            }
+                            
+                            await movimientos_collection.insert_one(movimiento)
+                            print(f"[AGREGAR-CUADRE] Fondo de caja USD procesado: {efectivo_usd} USD del banco {metodo_pago_usd}")
+                    else:
+                        print(f"[AGREGAR-CUADRE] Advertencia: Banco no encontrado para metodoPagoUsd: {metodo_pago_usd}")
+                except (InvalidId, ValueError) as e:
+                    print(f"[AGREGAR-CUADRE] Error al procesar metodoPagoUsd: {str(e)}")
+                except Exception as e:
+                    print(f"[AGREGAR-CUADRE] Error al actualizar banco para metodoPagoUsd: {str(e)}")
+                    import traceback
+                    print(traceback.format_exc())
+        
+        return {"message": "Cuadre guardado", "result": cuadre_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

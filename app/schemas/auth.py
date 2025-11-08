@@ -10,6 +10,13 @@ class PuntoVenta(BaseModel):
     puntoDebito: float
     puntoCredito: float
 
+class FondoCaja(BaseModel):
+    """Modelo para el fondo de caja en un cuadre"""
+    efectivoBs: float
+    efectivoUsd: float
+    metodoPagoBs: Optional[str] = None  # ID del banco usado para fondo en Bs
+    metodoPagoUsd: Optional[str] = None  # ID del banco usado para fondo en USD
+
 class Cuadre(BaseModel):
     dia: str
     cajaNumero: int
@@ -39,4 +46,5 @@ class Cuadre(BaseModel):
     hora: Optional[str] = None   # Hora (solo hora)
     valesUsd: Optional[float] = 0  # Permitir decimales y valor por defecto 0
     imagenesCuadre: Optional[List[str]] = None  # Nombres de los objetos de imagen en R2 (hasta 3)
+    fondoCaja: Optional[FondoCaja] = None  # Fondo de caja (opcional)
     # imagenCuadre: Optional[str] = None  # DEPRECATED: Usar imagenesCuadre
