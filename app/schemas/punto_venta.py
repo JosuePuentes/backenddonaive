@@ -38,9 +38,10 @@ class ProductoItem(BaseModel):
 
 
 class MetodoPago(BaseModel):
-    tipo: str  # "efectivo", "tarjeta", "transferencia", etc.
+    tipo: str  # "efectivo", "tarjeta", "transferencia", "banco", etc.
     monto: float
     divisa: str = "Bs"  # "Bs" o "USD"
+    banco_id: Optional[str] = None  # ID del banco si el tipo es "banco"
 
 
 class ItemVenta(BaseModel):
@@ -68,6 +69,7 @@ class VentaRequest(BaseModel):
     cliente: Optional[str] = None
     porcentaje_descuento: Optional[float] = None  # Porcentaje de descuento aplicado a toda la venta
     notas: Optional[str] = None
+    vuelto: Optional[List[MetodoPago]] = None  # Array de métodos de pago para el vuelto
 
 
 class VentaResponse(BaseModel):

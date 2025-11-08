@@ -260,6 +260,183 @@ async def obtener_codigo_farmacia_desde_sucursal(sucursal_id: str) -> Optional[s
         return None
 
 
+async def actualizar_saldos_bancarios(
+    metodos_pago: List[MetodoPago],
+    vuelto: Optional[List[MetodoPago]],
+    numero_factura: str,
+    venta_id: str,
+    usuario: dict
+):
+    """
+    Actualiza los saldos bancarios cuando se registra una venta.
+    
+    Para métodos de pago con banco_id:
+    - Suma el monto al saldo del banco
+    - Crea un movimiento tipo "venta"
+    
+    Para vuelto con banco_id:
+    - Resta el monto del saldo del banco
+    - Valida que haya saldo suficiente
+    - Crea un movimiento tipo "vuelto"
+    """
+    try:
+        bancos_collection = get_collection("BANCOS")
+        movimientos_collection = get_collection("MOVIMIENTOS_BANCOS")
+        
+        # Procesar métodos de pago con banco_id
+        for metodo in metodos_pago:
+            if metodo.banco_id and metodo.tipo == "banco":
+                try:
+                    banco_id = metodo.banco_id
+                    monto = metodo.monto
+                    divisa = metodo.divisa.upper() if metodo.divisa else "USD"
+                    
+                    print(f"[ACTUALIZAR-SALDOS-BANCOS] Procesando pago: banco_id={banco_id}, monto={monto}, divisa={divisa}")
+                    
+                    # Validar que el banco existe y está activo
+                    try:
+                        banco_oid = ObjectId(banco_id)
+                    except InvalidId:
+                        print(f"[ACTUALIZAR-SALDOS-BANCOS] ERROR: ID de banco inválido: {banco_id}")
+                        continue
+                    
+                    banco = await bancos_collection.find_one({"_id": banco_oid})
+                    if not banco:
+                        print(f"[ACTUALIZAR-SALDOS-BANCOS] ERROR: Banco no encontrado: {banco_id}")
+                        continue
+                    
+                    if not banco.get("activo", True):
+                        print(f"[ACTUALIZAR-SALDOS-BANCOS] ERROR: Banco inactivo: {banco_id}")
+                        continue
+                    
+                    # Obtener saldo actual y divisa del banco
+                    saldo_actual = float(banco.get("saldo", 0) or 0)
+                    divisa_banco = banco.get("divisa", "USD")
+                    
+                    # Convertir monto a la divisa del banco si es necesario
+                    monto_a_sumar = monto
+                    if divisa != divisa_banco:
+                        # Si el monto está en una divisa diferente, necesitaríamos la tasa
+                        # Por ahora, asumimos que el frontend envía en la divisa correcta
+                        print(f"[ACTUALIZAR-SALDOS-BANCOS] Advertencia: Divisa del pago ({divisa}) diferente de divisa del banco ({divisa_banco})")
+                    
+                    # Actualizar saldo (sumar)
+                    nuevo_saldo = saldo_actual + monto_a_sumar
+                    await bancos_collection.update_one(
+                        {"_id": banco_oid},
+                        {"$set": {"saldo": nuevo_saldo}}
+                    )
+                    
+                    print(f"[ACTUALIZAR-SALDOS-BANCOS] Saldo actualizado: {saldo_actual} -> {nuevo_saldo} ({divisa_banco})")
+                    
+                    # Crear movimiento tipo "venta"
+                    movimiento = {
+                        "banco_id": banco_id,
+                        "tipo": "venta",
+                        "monto": monto_a_sumar,
+                        "divisa": divisa_banco,
+                        "numero_factura": numero_factura,
+                        "venta_id": venta_id,
+                        "fecha": datetime.now().isoformat(),
+                        "usuario": usuario.get("correo", usuario.get("usuarioCorreo", "")),
+                        "descripcion": f"Pago de venta {numero_factura}",
+                        "saldo_anterior": saldo_actual,
+                        "saldo_nuevo": nuevo_saldo
+                    }
+                    
+                    await movimientos_collection.insert_one(movimiento)
+                    print(f"[ACTUALIZAR-SALDOS-BANCOS] Movimiento creado para banco {banco_id}")
+                    
+                except Exception as e:
+                    print(f"[ACTUALIZAR-SALDOS-BANCOS] Error al procesar método de pago: {str(e)}")
+                    import traceback
+                    print(traceback.format_exc())
+                    continue
+        
+        # Procesar vuelto con banco_id
+        if vuelto:
+            for metodo_vuelto in vuelto:
+                if metodo_vuelto.banco_id and metodo_vuelto.tipo == "banco":
+                    try:
+                        banco_id = metodo_vuelto.banco_id
+                        monto = metodo_vuelto.monto
+                        divisa = metodo_vuelto.divisa.upper() if metodo_vuelto.divisa else "USD"
+                        
+                        print(f"[ACTUALIZAR-SALDOS-BANCOS] Procesando vuelto: banco_id={banco_id}, monto={monto}, divisa={divisa}")
+                        
+                        # Validar que el banco existe y está activo
+                        try:
+                            banco_oid = ObjectId(banco_id)
+                        except InvalidId:
+                            print(f"[ACTUALIZAR-SALDOS-BANCOS] ERROR: ID de banco inválido: {banco_id}")
+                            continue
+                        
+                        banco = await bancos_collection.find_one({"_id": banco_oid})
+                        if not banco:
+                            print(f"[ACTUALIZAR-SALDOS-BANCOS] ERROR: Banco no encontrado: {banco_id}")
+                            continue
+                        
+                        if not banco.get("activo", True):
+                            print(f"[ACTUALIZAR-SALDOS-BANCOS] ERROR: Banco inactivo: {banco_id}")
+                            continue
+                        
+                        # Obtener saldo actual y divisa del banco
+                        saldo_actual = float(banco.get("saldo", 0) or 0)
+                        divisa_banco = banco.get("divisa", "USD")
+                        
+                        # Convertir monto a la divisa del banco si es necesario
+                        monto_a_restar = monto
+                        if divisa != divisa_banco:
+                            print(f"[ACTUALIZAR-SALDOS-BANCOS] Advertencia: Divisa del vuelto ({divisa}) diferente de divisa del banco ({divisa_banco})")
+                        
+                        # Validar que haya saldo suficiente
+                        if saldo_actual < monto_a_restar:
+                            print(f"[ACTUALIZAR-SALDOS-BANCOS] ERROR: Saldo insuficiente en banco {banco_id}. Saldo: {saldo_actual}, Vuelto: {monto_a_restar}")
+                            # No fallar la venta, solo registrar el error
+                            continue
+                        
+                        # Actualizar saldo (restar)
+                        nuevo_saldo = saldo_actual - monto_a_restar
+                        await bancos_collection.update_one(
+                            {"_id": banco_oid},
+                            {"$set": {"saldo": nuevo_saldo}}
+                        )
+                        
+                        print(f"[ACTUALIZAR-SALDOS-BANCOS] Saldo actualizado (vuelto): {saldo_actual} -> {nuevo_saldo} ({divisa_banco})")
+                        
+                        # Crear movimiento tipo "vuelto"
+                        movimiento = {
+                            "banco_id": banco_id,
+                            "tipo": "vuelto",
+                            "monto": -monto_a_restar,  # Negativo para indicar salida
+                            "divisa": divisa_banco,
+                            "numero_factura": numero_factura,
+                            "venta_id": venta_id,
+                            "fecha": datetime.now().isoformat(),
+                            "usuario": usuario.get("correo", usuario.get("usuarioCorreo", "")),
+                            "descripcion": f"Vuelto de venta {numero_factura}",
+                            "saldo_anterior": saldo_actual,
+                            "saldo_nuevo": nuevo_saldo
+                        }
+                        
+                        await movimientos_collection.insert_one(movimiento)
+                        print(f"[ACTUALIZAR-SALDOS-BANCOS] Movimiento de vuelto creado para banco {banco_id}")
+                        
+                    except Exception as e:
+                        print(f"[ACTUALIZAR-SALDOS-BANCOS] Error al procesar vuelto: {str(e)}")
+                        import traceback
+                        print(traceback.format_exc())
+                        continue
+        
+        print(f"[ACTUALIZAR-SALDOS-BANCOS] Procesamiento de saldos bancarios completado")
+        
+    except Exception as e:
+        print(f"[ACTUALIZAR-SALDOS-BANCOS] Error crítico: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        # No lanzar excepción para no fallar la venta
+
+
 async def actualizar_cuadre_con_venta(
     sucursal_id: str,
     metodos_pago: List[MetodoPago],
@@ -1332,6 +1509,21 @@ async def registrar_venta(
         except Exception as e:
             # No fallar la venta si hay error al actualizar el cuadre
             print(f"[REGISTRAR-VENTA] Advertencia: Error al actualizar cuadre: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+        
+        # Actualizar saldos bancarios (después de registrar la venta exitosamente)
+        try:
+            await actualizar_saldos_bancarios(
+                metodos_pago=venta.metodos_pago,
+                vuelto=venta.vuelto,
+                numero_factura=numero_factura,
+                venta_id=str(result.inserted_id),
+                usuario=usuario
+            )
+        except Exception as e:
+            # No fallar la venta si hay error al actualizar saldos bancarios
+            print(f"[REGISTRAR-VENTA] Advertencia: Error al actualizar saldos bancarios: {str(e)}")
             import traceback
             print(traceback.format_exc())
         
