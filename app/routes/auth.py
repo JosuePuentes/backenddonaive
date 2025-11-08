@@ -523,6 +523,17 @@ async def agregar_cuadre(farmacia: str, cuadre: Cuadre):
         # Validar que valesUsd esté presente (si no, poner 0)
         if "valesUsd" not in cuadre_dict or cuadre_dict["valesUsd"] is None:
             cuadre_dict["valesUsd"] = 0
+        
+        # Validar que costoInventario esté presente (si no, poner 0)
+        # El costo del inventario se calcula en el frontend basándose en el costo de cada artículo vendido
+        if "costoInventario" not in cuadre_dict or cuadre_dict["costoInventario"] is None:
+            cuadre_dict["costoInventario"] = 0.0
+        else:
+            # Asegurar que sea un float
+            try:
+                cuadre_dict["costoInventario"] = float(cuadre_dict["costoInventario"])
+            except (ValueError, TypeError):
+                cuadre_dict["costoInventario"] = 0.0
         # Eliminar campo imagenCuadre si existe (deprecated)
         if "imagenCuadre" in cuadre_dict:
             cuadre_dict.pop("imagenCuadre")
