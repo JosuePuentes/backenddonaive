@@ -94,3 +94,16 @@ class VentasUsuarioResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class DevolucionRequest(BaseModel):
+    """Modelo para procesar una devolución de compra"""
+    venta_original_id: str  # ID de la factura original a devolver
+    items_devolver: List[ItemVenta]  # Items que se devuelven (pueden ser parciales)
+    items_nuevos: List[ItemVenta]  # Items nuevos que se compran
+    metodos_pago: Optional[List[MetodoPago]] = None  # Métodos de pago solo si hay diferencia a favor
+    sucursal: str  # Sucursal donde se procesa la devolución
+    cajero: Optional[str] = None
+    cliente: Optional[str] = None
+    notas: Optional[str] = None
+    tasa_dia: float  # Tasa del día para cálculos

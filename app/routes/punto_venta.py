@@ -7,7 +7,8 @@ from app.schemas.punto_venta import (
     VentaRequest,
     VentaResponse,
     VentasUsuarioResponse,
-    MetodoPago
+    MetodoPago,
+    DevolucionRequest
 )
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -258,6 +259,146 @@ async def obtener_codigo_farmacia_desde_sucursal(sucursal_id: str) -> Optional[s
     except Exception as e:
         print(f"[OBTENER-CODIGO-FARMACIA] Error: {str(e)}")
         return None
+
+
+async def devolver_stock_a_inventario(
+    codigo_producto: str,
+    cantidad: int,
+    sucursal_id: str
+):
+    """
+    Devuelve stock a un inventario activo de la sucursal.
+    Si hay lotes, agrega a lotes existentes o crea nuevos.
+    Si no hay lotes, suma a la cantidad del item.
+    """
+    try:
+        inventarios_collection = get_collection("INVENTARIOS")
+        
+        # Buscar inventarios activos de la sucursal
+        inventarios = await inventarios_collection.find({
+            "sucursal": sucursal_id,
+            "estado": "activo"
+        }).sort("fecha_creacion", -1).to_list(length=10)
+        
+        # Buscar el item en los inventarios
+        item_encontrado = None
+        inventario_encontrado = None
+        
+        for inventario in inventarios:
+            items = inventario.get("items", []) or inventario.get("items_inventario", [])
+            for item in items:
+                item_codigo = item.get("codigo")
+                if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                    item_encontrado = item
+                    inventario_encontrado = inventario
+                    break
+            if item_encontrado:
+                break
+        
+        if not item_encontrado or not inventario_encontrado:
+            print(f"[DEVOLVER-STOCK] Advertencia: No se encontró item con código {codigo_producto} en inventarios de sucursal {sucursal_id}")
+            return False
+        
+        # Obtener índice del item en el inventario
+        items = inventario_encontrado.get("items", []) or inventario_encontrado.get("items_inventario", [])
+        item_index = None
+        for idx, item in enumerate(items):
+            item_codigo = item.get("codigo")
+            if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                item_index = idx
+                break
+        
+        if item_index is None:
+            print(f"[DEVOLVER-STOCK] ERROR: No se encontró índice del item")
+            return False
+        
+        # Devolver stock
+        lotes = item_encontrado.get("lotes", [])
+        
+        if lotes:
+            # Si hay lotes, agregar a un lote existente o crear uno nuevo
+            # Por simplicidad, agregar a un lote existente sin fecha o crear uno nuevo
+            lote_encontrado = None
+            lote_index = None
+            for idx, lote in enumerate(lotes):
+                if not lote.get("fecha_vencimiento"):
+                    lote_encontrado = lote
+                    lote_index = idx
+                    break
+            
+            if lote_encontrado:
+                # Agregar cantidad a lote existente
+                cantidad_actual = lote_encontrado.get("cantidad", 0) or 0
+                nueva_cantidad = cantidad_actual + cantidad
+                await inventarios_collection.update_one(
+                    {"_id": inventario_encontrado["_id"]},
+                    {"$set": {f"items.{item_index}.lotes.{lote_index}.cantidad": nueva_cantidad}}
+                )
+                print(f"[DEVOLVER-STOCK] Stock devuelto a lote existente: {cantidad} unidades")
+            else:
+                # Crear nuevo lote
+                nuevo_lote = {
+                    "numero_lote": f"DEV-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                    "fecha_vencimiento": None,
+                    "cantidad": cantidad
+                }
+                lotes.append(nuevo_lote)
+                await inventarios_collection.update_one(
+                    {"_id": inventario_encontrado["_id"]},
+                    {"$set": {f"items.{item_index}.lotes": lotes}}
+                )
+                print(f"[DEVOLVER-STOCK] Nuevo lote creado para devolución: {cantidad} unidades")
+            
+            # Recalcular cantidad total del item (suma de lotes)
+            inventario_actualizado = await inventarios_collection.find_one({"_id": inventario_encontrado["_id"]})
+            items_actualizados = inventario_actualizado.get("items", []) or inventario_actualizado.get("items_inventario", [])
+            item_actualizado = items_actualizados[item_index]
+            lotes_actualizados = item_actualizado.get("lotes", [])
+            cantidad_total_lotes = sum(l.get("cantidad", 0) or 0 for l in lotes_actualizados)
+            
+            await inventarios_collection.update_one(
+                {"_id": inventario_encontrado["_id"]},
+                {"$set": {f"items.{item_index}.cantidad": cantidad_total_lotes}}
+            )
+        else:
+            # No hay lotes, sumar a la cantidad del item
+            cantidad_actual = item_encontrado.get("cantidad", 0) or 0
+            nueva_cantidad = cantidad_actual + cantidad
+            await inventarios_collection.update_one(
+                {"_id": inventario_encontrado["_id"]},
+                {"$set": {f"items.{item_index}.cantidad": nueva_cantidad}}
+            )
+            print(f"[DEVOLVER-STOCK] Stock devuelto: {cantidad_actual} + {cantidad} = {nueva_cantidad}")
+        
+        # Recalcular totales del inventario
+        inventario_actualizado = await inventarios_collection.find_one({"_id": inventario_encontrado["_id"]})
+        items_actualizados = inventario_actualizado.get("items", []) or inventario_actualizado.get("items_inventario", [])
+        
+        costo_total_inventario = 0.0
+        total_existencias = 0
+        
+        for item_inv in items_actualizados:
+            cantidad_item = item_inv.get("cantidad", 0) or 0
+            costo_unitario_item = item_inv.get("costo_unitario", 0) or 0
+            costo_total_inventario += costo_unitario_item * cantidad_item
+            total_existencias += cantidad_item
+        
+        await inventarios_collection.update_one(
+            {"_id": inventario_encontrado["_id"]},
+            {"$set": {
+                "costo": costo_total_inventario,
+                "total_items": total_existencias
+            }}
+        )
+        
+        print(f"[DEVOLVER-STOCK] Stock devuelto exitosamente: {cantidad} unidades de {codigo_producto}")
+        return True
+        
+    except Exception as e:
+        print(f"[DEVOLVER-STOCK] Error al devolver stock: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        return False
 
 
 async def actualizar_saldos_bancarios(
@@ -1975,4 +2116,369 @@ async def obtener_ventas_usuario(
         raise HTTPException(
             status_code=500,
             detail=f"Error al obtener ventas del usuario: {str(e)}"
+        )
+
+
+@router.post("/devolucion", response_model=VentaResponse)
+async def procesar_devolucion(
+    devolucion: DevolucionRequest,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Procesa una devolución de compra.
+    
+    Pasos:
+    1. Busca la venta original
+    2. Marca la venta original como "devuelta"
+    3. Devuelve stock de los items devueltos
+    4. Descuenta stock de los items nuevos (si hay)
+    5. Crea una nueva venta con los items nuevos
+    6. Solo cobra la diferencia si el nuevo total es mayor
+    """
+    verificar_permiso(usuario, "agregar_cuadre")
+    
+    try:
+        ventas_collection = get_collection("VENTAS")
+        inventarios_collection = get_collection("INVENTARIOS")
+        productos_collection = get_collection("PRODUCTOS")
+        
+        # 1. Buscar la venta original
+        try:
+            venta_original_oid = ObjectId(devolucion.venta_original_id)
+        except InvalidId:
+            raise HTTPException(
+                status_code=400,
+                detail="ID de venta original inválido"
+            )
+        
+        venta_original = await ventas_collection.find_one({"_id": venta_original_oid})
+        if not venta_original:
+            raise HTTPException(
+                status_code=404,
+                detail="Venta original no encontrada"
+            )
+        
+        # Verificar que la venta no esté ya devuelta
+        if venta_original.get("estado") == "devuelta":
+            raise HTTPException(
+                status_code=400,
+                detail="Esta venta ya fue devuelta anteriormente"
+            )
+        
+        print(f"[DEVOLUCION] Procesando devolución de venta: {devolucion.venta_original_id}")
+        
+        # 2. Marcar venta original como "devuelta"
+        await ventas_collection.update_one(
+            {"_id": venta_original_oid},
+            {
+                "$set": {
+                    "estado": "devuelta",
+                    "fecha_devolucion": datetime.now().isoformat(),
+                    "usuario_devolucion": usuario.get("correo", usuario.get("usuarioCorreo", ""))
+                }
+            }
+        )
+        print(f"[DEVOLUCION] Venta original marcada como devuelta")
+        
+        # 3. Devolver stock de los items devueltos
+        sucursal_original = venta_original.get("sucursal", devolucion.sucursal)
+        
+        for item_devolver in devolucion.items_devolver:
+            codigo_producto = item_devolver.codigo
+            cantidad_devolver = item_devolver.cantidad
+            
+            if not codigo_producto:
+                # Intentar obtener código del producto_id
+                try:
+                    producto = await productos_collection.find_one({"_id": ObjectId(item_devolver.producto_id)})
+                    if producto:
+                        codigo_producto = producto.get("codigo")
+                except:
+                    pass
+            
+            if codigo_producto:
+                # Devolver stock al inventario
+                await devolver_stock_a_inventario(
+                    codigo_producto=codigo_producto,
+                    cantidad=cantidad_devolver,
+                    sucursal_id=sucursal_original
+                )
+                
+                # También actualizar stock en PRODUCTOS como fallback
+                try:
+                    await productos_collection.update_one(
+                        {"_id": ObjectId(item_devolver.producto_id)},
+                        {"$inc": {"stock": cantidad_devolver}}
+                    )
+                except:
+                    pass
+        
+        print(f"[DEVOLUCION] Stock devuelto para {len(devolucion.items_devolver)} items")
+        
+        # 4. Calcular totales de la devolución
+        total_devolucion_bs = sum(item.subtotal for item in devolucion.items_devolver)
+        total_devolucion_usd = sum(item.subtotal_usd or 0 for item in devolucion.items_devolver)
+        
+        total_nuevos_bs = sum(item.subtotal for item in devolucion.items_nuevos) if devolucion.items_nuevos else 0
+        total_nuevos_usd = sum(item.subtotal_usd or 0 for item in devolucion.items_nuevos) if devolucion.items_nuevos else 0
+        
+        diferencia_bs = total_nuevos_bs - total_devolucion_bs
+        diferencia_usd = total_nuevos_usd - total_devolucion_usd
+        
+        print(f"[DEVOLUCION] Totales - Devolución: {total_devolucion_bs} Bs, Nuevos: {total_nuevos_bs} Bs, Diferencia: {diferencia_bs} Bs")
+        
+        # 5. Si hay items nuevos, descontar stock y crear nueva venta
+        if devolucion.items_nuevos and len(devolucion.items_nuevos) > 0:
+            # Validar stock de items nuevos
+            for item_nuevo in devolucion.items_nuevos:
+                codigo_producto = item_nuevo.codigo
+                cantidad_solicitada = item_nuevo.cantidad
+                
+                if not codigo_producto:
+                    try:
+                        producto = await productos_collection.find_one({"_id": ObjectId(item_nuevo.producto_id)})
+                        if producto:
+                            codigo_producto = producto.get("codigo")
+                    except:
+                        pass
+                
+                if codigo_producto:
+                    # Validar stock disponible (usar la misma lógica que en registrar_venta)
+                    inventarios = await inventarios_collection.find({
+                        "sucursal": devolucion.sucursal,
+                        "estado": "activo"
+                    }).sort("fecha_creacion", -1).to_list(length=50)
+                    
+                    stock_disponible = 0
+                    for inventario in inventarios:
+                        items = inventario.get("items", []) or inventario.get("items_inventario", [])
+                        for item in items:
+                            item_codigo = item.get("codigo")
+                            if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                                lotes = item.get("lotes", [])
+                                if lotes:
+                                    for lote in lotes:
+                                        stock_disponible += lote.get("cantidad", 0) or 0
+                                else:
+                                    stock_disponible += item.get("cantidad", 0) or 0
+                                break
+                    
+                    if stock_disponible < cantidad_solicitada:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Stock insuficiente para {item_nuevo.nombre} (código: {codigo_producto}). Stock disponible: {stock_disponible}, solicitado: {cantidad_solicitada}"
+                        )
+            
+            # Descontar stock de items nuevos (usar la misma lógica que registrar_venta)
+            for item_nuevo in devolucion.items_nuevos:
+                codigo_producto = item_nuevo.codigo
+                cantidad_a_descontar = item_nuevo.cantidad
+                
+                if not codigo_producto:
+                    try:
+                        producto = await productos_collection.find_one({"_id": ObjectId(item_nuevo.producto_id)})
+                        if producto:
+                            codigo_producto = producto.get("codigo")
+                    except:
+                        pass
+                
+                if codigo_producto:
+                    # Buscar inventarios activos
+                    inventarios = await inventarios_collection.find({
+                        "sucursal": devolucion.sucursal,
+                        "estado": "activo"
+                    }).sort("fecha_creacion", -1).to_list(length=50)
+                    
+                    item_encontrado = None
+                    inventario_encontrado = None
+                    
+                    for inventario in inventarios:
+                        items = inventario.get("items", []) or inventario.get("items_inventario", [])
+                        for item in items:
+                            item_codigo = item.get("codigo")
+                            if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                                item_encontrado = item
+                                inventario_encontrado = inventario
+                                break
+                        if item_encontrado:
+                            break
+                    
+                    if item_encontrado and inventario_encontrado:
+                        # Descontar stock usando FIFO (misma lógica que registrar_venta)
+                        cantidad_restante = cantidad_a_descontar
+                        lotes = item_encontrado.get("lotes", [])
+                        
+                        if lotes:
+                            # Ordenar lotes por fecha de vencimiento (más antiguos primero)
+                            def ordenar_lotes_fifo(lote):
+                                fecha = lote.get("fecha_vencimiento")
+                                if fecha:
+                                    try:
+                                        if isinstance(fecha, str):
+                                            fecha_dt = datetime.strptime(fecha, "%Y-%m-%d")
+                                        else:
+                                            fecha_dt = fecha
+                                        return (0, fecha_dt)
+                                    except:
+                                        return (1, datetime.max)
+                                return (2, datetime.max)
+                            
+                            lotes_ordenados = sorted(lotes, key=ordenar_lotes_fifo)
+                            lotes_actualizados = []
+                            
+                            for lote in lotes_ordenados:
+                                if cantidad_restante <= 0:
+                                    lotes_actualizados.append(lote)
+                                    continue
+                                
+                                cantidad_lote = lote.get("cantidad", 0) or 0
+                                
+                                if cantidad_lote <= cantidad_restante:
+                                    cantidad_restante -= cantidad_lote
+                                    # No agregar el lote si queda en 0
+                                else:
+                                    lote["cantidad"] = cantidad_lote - cantidad_restante
+                                    cantidad_restante = 0
+                                    lotes_actualizados.append(lote)
+                            
+                            # Actualizar lotes
+                            items = inventario_encontrado.get("items", []) or inventario_encontrado.get("items_inventario", [])
+                            for idx, item in enumerate(items):
+                                item_codigo = item.get("codigo")
+                                if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                                    items[idx]["lotes"] = lotes_actualizados
+                                    cantidad_total_lotes = sum(l.get("cantidad", 0) or 0 for l in lotes_actualizados)
+                                    items[idx]["cantidad"] = cantidad_total_lotes
+                                    break
+                            
+                            inventario_encontrado["items"] = items
+                            await inventarios_collection.replace_one(
+                                {"_id": inventario_encontrado["_id"]},
+                                inventario_encontrado
+                            )
+                        else:
+                            # No hay lotes, descontar de la cantidad del item
+                            cantidad_actual = item_encontrado.get("cantidad", 0) or 0
+                            nueva_cantidad = cantidad_actual - cantidad_a_descontar
+                            
+                            items = inventario_encontrado.get("items", []) or inventario_encontrado.get("items_inventario", [])
+                            for idx, item in enumerate(items):
+                                item_codigo = item.get("codigo")
+                                if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
+                                    items[idx]["cantidad"] = nueva_cantidad
+                                    break
+                            
+                            inventario_encontrado["items"] = items
+                            await inventarios_collection.replace_one(
+                                {"_id": inventario_encontrado["_id"]},
+                                inventario_encontrado
+                            )
+            
+            # 6. Crear nueva venta solo si hay diferencia a favor (nuevo total > devolución)
+            if diferencia_bs > 0.01:  # Tolerancia para decimales
+                # Validar métodos de pago si se proporcionan
+                if not devolucion.metodos_pago or len(devolucion.metodos_pago) == 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Debe especificar métodos de pago. Diferencia a pagar: {diferencia_bs:.2f} Bs"
+                    )
+                
+                # Validar que los métodos de pago cubran la diferencia
+                suma_metodos_usd = 0.0
+                for mp in devolucion.metodos_pago:
+                    monto = mp.monto
+                    divisa = mp.divisa.upper() if mp.divisa else "BS"
+                    
+                    if divisa == "USD":
+                        suma_metodos_usd += monto
+                    else:
+                        suma_metodos_usd += monto / devolucion.tasa_dia if devolucion.tasa_dia > 0 else 0
+                
+                diferencia_usd_calculada = diferencia_bs / devolucion.tasa_dia if devolucion.tasa_dia > 0 else 0
+                
+                if suma_metodos_usd < diferencia_usd_calculada - 0.01:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Pago insuficiente. Diferencia: ${diferencia_usd_calculada:.2f} USD, Pagado: ${suma_metodos_usd:.2f} USD"
+                    )
+                
+                # Generar número de factura para la nueva venta
+                fecha_actual = datetime.now().strftime("%Y-%m-%d")
+                ventas_hoy = await ventas_collection.count_documents({"fecha": fecha_actual})
+                numero_factura = f"FAC-{fecha_actual.replace('-', '')}-{ventas_hoy + 1:04d}"
+                
+                # Crear nueva venta
+                nueva_venta_doc = {
+                    "numero_factura": numero_factura,
+                    "fecha": fecha_actual,
+                    "fecha_hora": datetime.now().isoformat(),
+                    "items": [item.dict() for item in devolucion.items_nuevos],
+                    "metodos_pago": [mp.dict() for mp in devolucion.metodos_pago],
+                    "total_bs": diferencia_bs,
+                    "total_usd": diferencia_usd_calculada,
+                    "tasa_dia": devolucion.tasa_dia,
+                    "sucursal": devolucion.sucursal,
+                    "cajero": devolucion.cajero or usuario.get("correo", usuario.get("usuarioCorreo")),
+                    "cliente": devolucion.cliente or venta_original.get("cliente"),
+                    "notas": f"Devolución de venta {venta_original.get('numero_factura', devolucion.venta_original_id)}. {devolucion.notas or ''}",
+                    "usuario_registro": usuario.get("correo", usuario.get("usuarioCorreo")),
+                    "venta_devolucion_id": str(venta_original_oid),
+                    "tipo": "devolucion"
+                }
+                
+                result = await ventas_collection.insert_one(nueva_venta_doc)
+                nueva_venta_id = str(result.inserted_id)
+                
+                print(f"[DEVOLUCION] Nueva venta creada: {numero_factura} (ID: {nueva_venta_id})")
+                
+                # Actualizar cuadre y saldos bancarios (usar las mismas funciones que registrar_venta)
+                try:
+                    await actualizar_cuadre_con_venta(
+                        sucursal_id=devolucion.sucursal,
+                        metodos_pago=devolucion.metodos_pago,
+                        total_bs=diferencia_bs,
+                        total_usd=diferencia_usd_calculada,
+                        tasa_dia=devolucion.tasa_dia
+                    )
+                except Exception as e:
+                    print(f"[DEVOLUCION] Advertencia: Error al actualizar cuadre: {str(e)}")
+                
+                try:
+                    await actualizar_saldos_bancarios(
+                        metodos_pago=devolucion.metodos_pago,
+                        vuelto=None,
+                        numero_factura=numero_factura,
+                        venta_id=nueva_venta_id,
+                        usuario=usuario
+                    )
+                except Exception as e:
+                    print(f"[DEVOLUCION] Advertencia: Error al actualizar saldos bancarios: {str(e)}")
+                
+                # Retornar la nueva venta
+                nueva_venta_doc["_id"] = nueva_venta_id
+                return VentaResponse(**nueva_venta_doc)
+            else:
+                # No hay diferencia a favor, solo devolver confirmación
+                print(f"[DEVOLUCION] No hay diferencia a favor. Devolución completada sin nueva venta.")
+                # Retornar respuesta con la venta original marcada como devuelta
+                venta_original["_id"] = str(venta_original_oid)
+                venta_original["estado"] = "devuelta"
+                return VentaResponse(**venta_original)
+        else:
+            # No hay items nuevos, solo devolución
+            print(f"[DEVOLUCION] Solo devolución, sin items nuevos")
+            # Retornar respuesta con la venta original marcada como devuelta
+            venta_original["_id"] = str(venta_original_oid)
+            venta_original["estado"] = "devuelta"
+            return VentaResponse(**venta_original)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[DEVOLUCION] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al procesar devolución: {str(e)}"
         )
