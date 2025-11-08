@@ -1932,30 +1932,89 @@ async def obtener_ventas_del_dia(
 ):
     """
     Obtiene todas las ventas del día para una fecha específica.
+    Filtra por rango completo del día (00:00:00 a 23:59:59).
     Opcionalmente filtra por sucursal.
     Requiere autenticación.
+    NO usa caché - siempre devuelve datos en tiempo real.
     """
     try:
         # Validar formato de fecha
         try:
-            datetime.strptime(fecha, "%Y-%m-%d")
+            fecha_parsed = datetime.strptime(fecha, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(
                 status_code=400,
                 detail="Formato de fecha inválido. Use YYYY-MM-DD"
             )
         
-        # Obtener colección de ventas
+        # Calcular rango del día completo (00:00:00 a 23:59:59)
+        inicio_dia = fecha_parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+        fin_dia = fecha_parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+        
+        # Convertir a ISO format para comparación con fecha_hora
+        inicio_dia_iso = inicio_dia.isoformat()
+        fin_dia_iso = fin_dia.isoformat()
+        
+        print(f"[OBTENER-VENTAS] Filtrando ventas del día {fecha} (rango: {inicio_dia_iso} a {fin_dia_iso})")
+        
+        # Obtener colección de ventas (sin caché - siempre consulta directa)
         ventas_collection = get_collection("VENTAS")
         
-        # Construir filtro
-        filtro = {"fecha": fecha}
+        # Construir filtro con rango de fecha completo
+        # Buscar por campo 'fecha' (string) O por 'fecha_hora' (datetime) dentro del rango
+        condiciones_fecha = [
+            # Filtro por campo 'fecha' (string) - exacto
+            {"fecha": fecha}
+        ]
+        
+        # Agregar filtro por fecha_hora (puede ser string ISO o datetime)
+        # Intentar con datetime primero (más común en MongoDB)
+        condiciones_fecha.append({
+            "fecha_hora": {
+                "$gte": inicio_dia,
+                "$lte": fin_dia
+            }
+        })
+        
+        # También considerar fecha_hora como string ISO
+        condiciones_fecha.append({
+            "fecha_hora": {
+                "$gte": inicio_dia_iso,
+                "$lte": fin_dia_iso
+            }
+        })
+        
+        filtro = {
+            "$or": condiciones_fecha
+        }
         
         # Si se especifica sucursal, agregar al filtro
         if sucursal:
-            filtro["sucursal"] = sucursal
+            # Intentar convertir a ObjectId si es posible, sino usar como string
+            try:
+                sucursal_oid = ObjectId(sucursal)
+                # Buscar por ObjectId o string
+                filtro_sucursal = {
+                    "$or": [
+                        {"sucursal": sucursal_oid},
+                        {"sucursal": sucursal}
+                    ]
+                }
+            except (InvalidId, ValueError):
+                # Si no es ObjectId válido, usar como string
+                filtro_sucursal = {"sucursal": sucursal}
+            
+            # Combinar filtro de fecha con filtro de sucursal usando $and
+            filtro = {
+                "$and": [
+                    {"$or": condiciones_fecha},
+                    filtro_sucursal
+                ]
+            }
         
-        # Buscar ventas
+        print(f"[OBTENER-VENTAS] Filtro aplicado: {filtro}")
+        
+        # Buscar ventas (sin caché - consulta directa a la base de datos)
         ventas = await ventas_collection.find(filtro).sort("fecha_hora", -1).to_list(length=None)
         
         # Formatear resultados
