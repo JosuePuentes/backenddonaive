@@ -1928,12 +1928,13 @@ async def obtener_resumen_ventas(
 async def obtener_ventas_del_dia(
     fecha: str = Query(..., description="Fecha en formato YYYY-MM-DD"),
     sucursal: Optional[str] = Query(None, description="ID de la sucursal (opcional)"),
+    cajero: Optional[str] = Query(None, description="Correo del usuario o nombre del cajero (opcional)"),
     usuario: dict = Depends(get_current_user)
 ):
     """
     Obtiene todas las ventas del día para una fecha específica.
     Filtra por rango completo del día (00:00:00 a 23:59:59).
-    Opcionalmente filtra por sucursal.
+    Opcionalmente filtra por sucursal y/o cajero.
     Requiere autenticación.
     NO usa caché - siempre devuelve datos en tiempo real.
     """
@@ -1984,9 +1985,8 @@ async def obtener_ventas_del_dia(
             }
         })
         
-        filtro = {
-            "$or": condiciones_fecha
-        }
+        # Construir condiciones adicionales (sucursal y cajero)
+        condiciones_adicionales = []
         
         # Si se especifica sucursal, agregar al filtro
         if sucursal:
@@ -2004,12 +2004,31 @@ async def obtener_ventas_del_dia(
                 # Si no es ObjectId válido, usar como string
                 filtro_sucursal = {"sucursal": sucursal}
             
-            # Combinar filtro de fecha con filtro de sucursal usando $and
+            condiciones_adicionales.append(filtro_sucursal)
+        
+        # Si se especifica cajero, agregar al filtro
+        if cajero:
+            # Buscar por campo 'cajero' o 'usuario_registro'
+            filtro_cajero = {
+                "$or": [
+                    {"cajero": cajero},
+                    {"usuario_registro": cajero}
+                ]
+            }
+            condiciones_adicionales.append(filtro_cajero)
+        
+        # Construir filtro final
+        if condiciones_adicionales:
+            # Combinar filtro de fecha con filtros adicionales usando $and
             filtro = {
                 "$and": [
-                    {"$or": condiciones_fecha},
-                    filtro_sucursal
-                ]
+                    {"$or": condiciones_fecha}
+                ] + condiciones_adicionales
+            }
+        else:
+            # Solo filtro de fecha
+            filtro = {
+                "$or": condiciones_fecha
             }
         
         print(f"[OBTENER-VENTAS] Filtro aplicado: {filtro}")
@@ -2023,7 +2042,13 @@ async def obtener_ventas_del_dia(
             venta["_id"] = str(venta["_id"])
             resultado.append(VentaResponse(**venta))
         
-        print(f"[OBTENER-VENTAS] Encontradas {len(resultado)} ventas para fecha {fecha}" + (f" y sucursal {sucursal}" if sucursal else ""))
+        filtros_aplicados = [f"fecha {fecha}"]
+        if sucursal:
+            filtros_aplicados.append(f"sucursal {sucursal}")
+        if cajero:
+            filtros_aplicados.append(f"cajero {cajero}")
+        
+        print(f"[OBTENER-VENTAS] Encontradas {len(resultado)} ventas para: {', '.join(filtros_aplicados)}")
         
         return resultado
         
