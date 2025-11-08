@@ -488,24 +488,33 @@ try:
         }
         """
         try:
+            # Log para debugging
+            print(f"[CREAR-BANCO] Datos recibidos: {data}")
+            print(f"[CREAR-BANCO] Tipo de datos: {type(data)}")
+            
             # Validar campos requeridos
             numero_cuenta = data.get("numero_cuenta") or data.get("numeroCuenta")
             nombre_banco = data.get("nombre_banco") or data.get("nombreBanco") or data.get("nombre")
             nombre_titular = data.get("nombre_titular") or data.get("nombreTitular")
             
+            print(f"[CREAR-BANCO] Campos extraídos - numero_cuenta: {numero_cuenta}, nombre_banco: {nombre_banco}, nombre_titular: {nombre_titular}")
+            
             if not numero_cuenta:
+                print(f"[CREAR-BANCO] ERROR: Falta campo 'numero_cuenta'")
                 raise HTTPException(
                     status_code=400,
                     detail="El campo 'numero_cuenta' es requerido"
                 )
             
             if not nombre_banco:
+                print(f"[CREAR-BANCO] ERROR: Falta campo 'nombre_banco'")
                 raise HTTPException(
                     status_code=400,
                     detail="El campo 'nombre_banco' es requerido"
                 )
             
             if not nombre_titular:
+                print(f"[CREAR-BANCO] ERROR: Falta campo 'nombre_titular'")
                 raise HTTPException(
                     status_code=400,
                     detail="El campo 'nombre_titular' es requerido"
