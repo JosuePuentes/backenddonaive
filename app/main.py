@@ -584,6 +584,123 @@ try:
                 detail=f"Error al crear banco: {str(e)}"
             )
 
+    # Endpoint para obtener movimientos de un banco
+    @app.get("/bancos/{banco_id}/movimientos")
+    async def obtener_movimientos_banco(
+        banco_id: str,
+        usuario: dict = Depends(get_current_user)
+    ):
+        """
+        Obtiene los movimientos de un banco específico.
+        Requiere autenticación.
+        
+        Retorna una lista de movimientos asociados al banco.
+        """
+        try:
+            # Validar que el banco existe
+            bancos_collection = get_collection("BANCOS")
+            try:
+                banco_oid = ObjectId(banco_id)
+            except InvalidId:
+                raise HTTPException(
+                    status_code=400,
+                    detail="ID de banco inválido"
+                )
+            
+            banco = await bancos_collection.find_one({"_id": banco_oid})
+            if not banco:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Banco no encontrado"
+                )
+            
+            print(f"[OBTENER-MOVIMIENTOS-BANCO] Buscando movimientos para banco: {banco_id}")
+            
+            # Buscar movimientos en diferentes colecciones posibles
+            movimientos = []
+            
+            # 1. Buscar en colección MOVIMIENTOS_BANCOS (si existe)
+            try:
+                movimientos_collection = get_collection("MOVIMIENTOS_BANCOS")
+                movimientos_docs = await movimientos_collection.find({
+                    "banco_id": banco_id
+                }).sort("fecha", -1).to_list(length=None)
+                
+                for mov in movimientos_docs:
+                    mov["_id"] = str(mov["_id"])
+                    movimientos.append(mov)
+                
+                print(f"[OBTENER-MOVIMIENTOS-BANCO] Encontrados {len(movimientos_docs)} movimientos en MOVIMIENTOS_BANCOS")
+            except Exception as e:
+                print(f"[OBTENER-MOVIMIENTOS-BANCO] No se encontró colección MOVIMIENTOS_BANCOS: {str(e)}")
+            
+            # 2. Buscar en PAGOS_CPP donde el banco es emisor o receptor
+            try:
+                pagos_collection = get_collection("PAGOS_CPP")
+                # Buscar por bancoEmisor o bancoReceptor (puede ser ID o nombre)
+                numero_cuenta = banco.get("numero_cuenta", "")
+                nombre_banco = banco.get("nombre_banco", banco.get("nombreBanco", ""))
+                
+                # Buscar por ID del banco
+                pagos_por_id = await pagos_collection.find({
+                    "$or": [
+                        {"bancoEmisor": banco_id},
+                        {"bancoReceptor": banco_id}
+                    ]
+                }).sort("fecha", -1).to_list(length=None)
+                
+                # Buscar por número de cuenta o nombre de banco
+                pagos_por_nombre = await pagos_collection.find({
+                    "$or": [
+                        {"bancoEmisor": numero_cuenta},
+                        {"bancoReceptor": numero_cuenta},
+                        {"bancoEmisor": nombre_banco},
+                        {"bancoReceptor": nombre_banco}
+                    ]
+                }).sort("fecha", -1).to_list(length=None)
+                
+                # Combinar y evitar duplicados
+                pagos_encontrados = {}
+                for pago in pagos_por_id + pagos_por_nombre:
+                    pago_id = str(pago.get("_id", ""))
+                    if pago_id not in pagos_encontrados:
+                        pago["_id"] = pago_id
+                        pago["tipo"] = "pago_cpp"  # Identificar el tipo de movimiento
+                        pagos_encontrados[pago_id] = pago
+                
+                movimientos.extend(list(pagos_encontrados.values()))
+                print(f"[OBTENER-MOVIMIENTOS-BANCO] Encontrados {len(pagos_encontrados)} pagos en PAGOS_CPP")
+            except Exception as e:
+                print(f"[OBTENER-MOVIMIENTOS-BANCO] Error al buscar en PAGOS_CPP: {str(e)}")
+            
+            # Ordenar todos los movimientos por fecha (más recientes primero)
+            movimientos_ordenados = sorted(
+                movimientos,
+                key=lambda x: x.get("fecha", x.get("fechaRegistro", x.get("fecha_creacion", ""))),
+                reverse=True
+            )
+            
+            print(f"[OBTENER-MOVIMIENTOS-BANCO] Total de movimientos encontrados: {len(movimientos_ordenados)}")
+            
+            return {
+                "banco_id": banco_id,
+                "numero_cuenta": banco.get("numero_cuenta", ""),
+                "nombre_banco": banco.get("nombre_banco", banco.get("nombreBanco", "")),
+                "movimientos": movimientos_ordenados,
+                "total": len(movimientos_ordenados)
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[OBTENER-MOVIMIENTOS-BANCO] Error: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al obtener movimientos del banco: {str(e)}"
+            )
+
     # Registrar routers
     app.include_router(example_router, prefix="/api/v1")
     app.include_router(auth.router, tags=["auth"]) # auth.router now only contains login and admin-specific endpoints
