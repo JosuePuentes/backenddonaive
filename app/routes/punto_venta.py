@@ -1335,14 +1335,17 @@ async def buscar_productos(
             # Calcular cantidad total: usar suma de lotes si existen, sino usar stock
             cantidad_final = cantidad_total_lotes if lotes_encontrados else int(stock)
             
-            # OPTIMIZACIÓN: Solo obtener stock por sucursal si realmente se necesita
-            # (comentado para mejorar rendimiento - descomentar si es necesario)
+            # Obtener stock por sucursal para cada producto
+            # Incluye el stock en todas las sucursales con el nombre real de cada sucursal
             stock_por_sucursal_list = []
-            # if codigo_producto:
-            #     try:
-            #         stock_por_sucursal_list = await obtener_stock_por_sucursal(codigo_producto)
-            #     except Exception as e:
-            #         print(f"[BUSCAR-PRODUCTOS] Error al obtener stock por sucursal: {str(e)}")
+            if codigo_producto:
+                try:
+                    stock_por_sucursal_list = await obtener_stock_por_sucursal(codigo_producto)
+                except Exception as e:
+                    print(f"[BUSCAR-PRODUCTOS] Error al obtener stock por sucursal: {str(e)}")
+                    # Continuar sin stock por sucursal si hay error
+                    import traceback
+                    print(traceback.format_exc())
             
             resultado.append(ProductoItem(
                 id=str(producto["_id"]),
@@ -1352,7 +1355,7 @@ async def buscar_productos(
                 precio_usd=None,  # Se calculará en el frontend
                 stock=int(stock),  # Mantener para compatibilidad
                 cantidad=cantidad_final,  # Stock total (suma de lotes si existen)
-                stock_por_sucursal=stock_por_sucursal_list,  # Vacío por defecto para mejor rendimiento
+                stock_por_sucursal=stock_por_sucursal_list,  # Stock en todas las sucursales con nombres
                 lotes=lotes_encontrados if lotes_encontrados else [],  # Array de lotes ordenado
                 sucursal=sucursal or producto.get("sucursal")
             ))
