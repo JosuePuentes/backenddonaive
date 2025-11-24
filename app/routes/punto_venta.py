@@ -17,6 +17,7 @@ from typing import List, Optional
 from datetime import datetime
 import re
 import pytz
+import asyncio
 
 router = APIRouter()
 
@@ -1287,6 +1288,102 @@ async def buscar_productos(
             except Exception as e:
                 print(f"[BUSCAR-PRODUCTOS] Error en agregación de lotes: {str(e)}")
         
+        # OPTIMIZACIÓN: Obtener stock por sucursal para todos los productos usando agregación
+        # Esto es mucho más rápido que llamar obtener_stock_por_sucursal() para cada producto
+        codigos_productos = [str(p.get("codigo", "")).strip() for p in productos if p.get("codigo")]
+        
+        stock_por_sucursal_cache = {}
+        if codigos_productos:
+            try:
+                inventarios_collection = get_collection("INVENTARIOS")
+                
+                # Agregación optimizada para obtener stock de múltiples productos
+                pipeline = [
+                    {"$match": {"estado": "activo"}},
+                    {"$unwind": "$items"},
+                    {
+                        "$match": {
+                            "items.codigo": {"$in": codigos_productos}
+                        }
+                    },
+                    {
+                        "$project": {
+                            "sucursal": {"$toString": "$sucursal"},
+                            "codigo": "$items.codigo",
+                            "cantidad": {
+                                "$cond": [
+                                    {"$and": [
+                                        {"$isArray": "$items.lotes"},
+                                        {"$gt": [{"$size": "$items.lotes"}, 0]}
+                                    ]},
+                                    {"$sum": "$items.lotes.cantidad"},
+                                    {"$ifNull": ["$items.cantidad", 0]}
+                                ]
+                            }
+                        }
+                    },
+                    {
+                        "$group": {
+                            "_id": {
+                                "sucursal": "$sucursal",
+                                "codigo": "$codigo"
+                            },
+                            "cantidad_total": {"$sum": "$cantidad"}
+                        }
+                    },
+                    {
+                        "$group": {
+                            "_id": "$_id.codigo",
+                            "stock_por_sucursal": {
+                                "$push": {
+                                    "sucursal_id": "$_id.sucursal",
+                                    "cantidad": "$cantidad_total",
+                                    "stock": "$cantidad_total"
+                                }
+                            }
+                        }
+                    }
+                ]
+                
+                stock_agregado = await inventarios_collection.aggregate(pipeline).to_list(length=100)
+                
+                # Procesar resultados y obtener nombres de sucursales
+                # Obtener todos los IDs de sucursales únicos primero
+                sucursales_ids = set()
+                for item in stock_agregado:
+                    stock_data = item.get("stock_por_sucursal", [])
+                    for stock_item in stock_data:
+                        sucursal_id = stock_item.get("sucursal_id")
+                        if sucursal_id:
+                            sucursales_ids.add(sucursal_id)
+                
+                # Obtener nombres de sucursales en paralelo (más eficiente)
+                nombres_sucursales = {}
+                if sucursales_ids:
+                    # Usar asyncio.gather para obtener nombres en paralelo
+                    tasks = [obtener_nombre_sucursal(sid) for sid in sucursales_ids]
+                    nombres = await asyncio.gather(*tasks, return_exceptions=True)
+                    for sid, nombre in zip(sucursales_ids, nombres):
+                        nombres_sucursales[sid] = nombre if not isinstance(nombre, Exception) else sid
+                
+                # Procesar resultados con nombres
+                for item in stock_agregado:
+                    codigo = str(item.get("_id", ""))
+                    stock_data = item.get("stock_por_sucursal", [])
+                    
+                    stock_con_nombres = []
+                    for stock_item in stock_data:
+                        sucursal_id = stock_item.get("sucursal_id")
+                        stock_item["sucursal_nombre"] = nombres_sucursales.get(sucursal_id, sucursal_id)
+                        stock_con_nombres.append(stock_item)
+                    
+                    stock_por_sucursal_cache[codigo] = stock_con_nombres
+                    
+            except Exception as e:
+                print(f"[BUSCAR-PRODUCTOS] Error en agregacion de stock por sucursal: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
+        
         # Transformar resultados
         resultado = []
         for producto in productos:
@@ -1335,17 +1432,11 @@ async def buscar_productos(
             # Calcular cantidad total: usar suma de lotes si existen, sino usar stock
             cantidad_final = cantidad_total_lotes if lotes_encontrados else int(stock)
             
-            # Obtener stock por sucursal para cada producto
-            # Incluye el stock en todas las sucursales con el nombre real de cada sucursal
+            # OPTIMIZACIÓN: Usar stock por sucursal del cache (obtenido en batch)
             stock_por_sucursal_list = []
             if codigo_producto:
-                try:
-                    stock_por_sucursal_list = await obtener_stock_por_sucursal(codigo_producto)
-                except Exception as e:
-                    print(f"[BUSCAR-PRODUCTOS] Error al obtener stock por sucursal: {str(e)}")
-                    # Continuar sin stock por sucursal si hay error
-                    import traceback
-                    print(traceback.format_exc())
+                codigo_str = str(codigo_producto).strip()
+                stock_por_sucursal_list = stock_por_sucursal_cache.get(codigo_str, [])
             
             resultado.append(ProductoItem(
                 id=str(producto["_id"]),
@@ -1355,7 +1446,7 @@ async def buscar_productos(
                 precio_usd=None,  # Se calculará en el frontend
                 stock=int(stock),  # Mantener para compatibilidad
                 cantidad=cantidad_final,  # Stock total (suma de lotes si existen)
-                stock_por_sucursal=stock_por_sucursal_list,  # Stock en todas las sucursales con nombres
+                stock_por_sucursal=stock_por_sucursal_list,  # Stock en todas las sucursales con nombres (del cache)
                 lotes=lotes_encontrados if lotes_encontrados else [],  # Array de lotes ordenado
                 sucursal=sucursal or producto.get("sucursal")
             ))
