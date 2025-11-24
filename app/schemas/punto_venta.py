@@ -3,6 +3,13 @@ from typing import List, Optional
 from datetime import datetime
 
 
+class ClienteVentaResponse(BaseModel):
+    """Modelo simplificado de cliente para respuestas de ventas"""
+    _id: str
+    nombre: str
+    cedula: str
+
+
 class TasaCambioResponse(BaseModel):
     fecha: str
     tasa: float
@@ -82,7 +89,7 @@ class VentaResponse(BaseModel):
     tasa_dia: float
     sucursal: str
     cajero: Optional[str] = None
-    cliente: Optional[str] = None
+    cliente: Optional[ClienteVentaResponse] = None  # Objeto cliente o null
     porcentaje_descuento: Optional[float] = None  # Porcentaje de descuento aplicado a toda la venta
     notas: Optional[str] = None
     _id: str

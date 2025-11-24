@@ -8,7 +8,8 @@ from app.schemas.punto_venta import (
     VentaResponse,
     VentasUsuarioResponse,
     MetodoPago,
-    DevolucionRequest
+    DevolucionRequest,
+    ClienteVentaResponse
 )
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -18,6 +19,82 @@ import re
 import pytz
 
 router = APIRouter()
+
+
+async def obtener_cliente_venta(cliente_id: Optional[str]) -> Optional[ClienteVentaResponse]:
+    """
+    Función helper para obtener un cliente desde la colección CLIENTES.
+    Retorna un objeto ClienteVentaResponse con _id, nombre y cedula, o None si no existe.
+    """
+    if not cliente_id:
+        return None
+    
+    try:
+        clientes_collection = get_collection("CLIENTES")
+        
+        # Intentar buscar por ObjectId
+        try:
+            cliente_doc = await clientes_collection.find_one({"_id": ObjectId(cliente_id)})
+            if cliente_doc:
+                return ClienteVentaResponse(
+                    _id=str(cliente_doc["_id"]),
+                    nombre=cliente_doc.get("nombre", ""),
+                    cedula=cliente_doc.get("cedula", "")
+                )
+        except (InvalidId, ValueError):
+            # Si no es ObjectId válido, buscar por string
+            try:
+                cliente_doc = await clientes_collection.find_one({"_id": cliente_id})
+                if cliente_doc:
+                    return ClienteVentaResponse(
+                        _id=str(cliente_doc["_id"]),
+                        nombre=cliente_doc.get("nombre", ""),
+                        cedula=cliente_doc.get("cedula", "")
+                    )
+            except Exception as e:
+                print(f"[OBTENER-CLIENTE-VENTA] Error al buscar cliente por string {cliente_id}: {str(e)}")
+    except Exception as e:
+        print(f"[OBTENER-CLIENTE-VENTA] Error al obtener cliente {cliente_id}: {str(e)}")
+    
+    return None
+
+
+async def procesar_cliente_en_venta(venta: dict) -> dict:
+    """
+    Función helper para procesar el campo cliente en una venta.
+    Hace lookup del cliente desde la colección CLIENTES y retorna la venta con cliente procesado.
+    Si no hay cliente, establece cliente: None.
+    """
+    cliente_id = venta.get("cliente")
+    if cliente_id:
+        # Si cliente es un string (ID), hacer lookup
+        if isinstance(cliente_id, str):
+            cliente_obj = await obtener_cliente_venta(cliente_id)
+            venta["cliente"] = cliente_obj.dict() if cliente_obj else None
+        # Si cliente es un dict/objeto, verificar que tenga la estructura correcta
+        elif isinstance(cliente_id, dict):
+            # Si ya tiene _id, nombre y cedula, mantenerlo
+            if all(key in cliente_id for key in ["_id", "nombre", "cedula"]):
+                venta["cliente"] = {
+                    "_id": str(cliente_id["_id"]),
+                    "nombre": cliente_id.get("nombre", ""),
+                    "cedula": cliente_id.get("cedula", "")
+                }
+            else:
+                # Si es un objeto pero no tiene la estructura correcta, intentar lookup por _id
+                cliente_obj_id = str(cliente_id.get("_id", ""))
+                if cliente_obj_id:
+                    cliente_obj = await obtener_cliente_venta(cliente_obj_id)
+                    venta["cliente"] = cliente_obj.dict() if cliente_obj else None
+                else:
+                    venta["cliente"] = None
+        else:
+            venta["cliente"] = None
+    else:
+        # Si no hay cliente, enviar null
+        venta["cliente"] = None
+    
+    return venta
 
 
 async def obtener_nombre_sucursal(sucursal_id) -> str:
@@ -1670,6 +1747,8 @@ async def registrar_venta(
         
         # Retornar respuesta
         venta_doc["_id"] = str(result.inserted_id)
+        # Procesar cliente antes de retornar
+        venta_doc = await procesar_cliente_en_venta(venta_doc)
         return VentaResponse(**venta_doc)
         
     except HTTPException:
@@ -2040,6 +2119,8 @@ async def obtener_ventas_del_dia(
         resultado = []
         for venta in ventas:
             venta["_id"] = str(venta["_id"])
+            # Procesar cliente antes de agregar
+            venta = await procesar_cliente_en_venta(venta)
             resultado.append(VentaResponse(**venta))
         
         filtros_aplicados = [f"fecha {fecha}"]
@@ -2177,6 +2258,10 @@ async def obtener_ventas_usuario(
         facturas = []
         for venta in ventas:
             venta["_id"] = str(venta["_id"])
+            
+            # Procesar cliente antes de agregar
+            venta = await procesar_cliente_en_venta(venta)
+            
             # Asegurar que todos los campos estén presentes
             facturas.append(VentaResponse(**venta))
         
@@ -2540,6 +2625,7 @@ async def procesar_devolucion(
                 
                 # Retornar la nueva venta
                 nueva_venta_doc["_id"] = nueva_venta_id
+                nueva_venta_doc = await procesar_cliente_en_venta(nueva_venta_doc)
                 return VentaResponse(**nueva_venta_doc)
             else:
                 # No hay diferencia a favor, solo devolver confirmación
@@ -2547,6 +2633,7 @@ async def procesar_devolucion(
                 # Retornar respuesta con la venta original marcada como devuelta
                 venta_original["_id"] = str(venta_original_oid)
                 venta_original["estado"] = "devuelta"
+                venta_original = await procesar_cliente_en_venta(venta_original)
                 return VentaResponse(**venta_original)
         else:
             # No hay items nuevos, solo devolución
@@ -2554,6 +2641,7 @@ async def procesar_devolucion(
             # Retornar respuesta con la venta original marcada como devuelta
             venta_original["_id"] = str(venta_original_oid)
             venta_original["estado"] = "devuelta"
+            venta_original = await procesar_cliente_en_venta(venta_original)
             return VentaResponse(**venta_original)
         
     except HTTPException:
