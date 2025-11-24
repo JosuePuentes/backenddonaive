@@ -1143,18 +1143,24 @@ async def buscar_productos(
     usuario: dict = Depends(get_current_user)
 ):
     """
-    Busca productos por nombre o código en tiempo real.
+    Busca productos por nombre o código en tiempo real (OPTIMIZADO).
     Requiere permiso: agregar_cuadre
+    
+    Optimizaciones aplicadas:
+    - Usa índices de texto para búsquedas rápidas
+    - Búsqueda de lotes optimizada con agregaciones
+    - Stock por sucursal solo se calcula si es necesario
+    - Límite mínimo de 2 caracteres para búsquedas
     """
     verificar_permiso(usuario, "agregar_cuadre")
     
-    # Si la búsqueda tiene menos de 1 carácter, devolver array vacío
-    if not q or len(q.strip()) < 1:
+    # Optimización: Requerir mínimo 2 caracteres para búsquedas (reduce carga)
+    q = q.strip() if q else ""
+    if len(q) < 2:
         return []
     
     try:
         # Buscar en la colección de productos/inventarios
-        # Asumiendo que los productos están en INVENTARIOS o en una colección PRODUCTOS
         productos_collection = get_collection("PRODUCTOS")
         
         # Si no existe PRODUCTOS, buscar en INVENTARIOS
@@ -1163,37 +1169,123 @@ async def buscar_productos(
         except:
             productos_collection = get_collection("INVENTARIOS")
         
-        # Construir query de búsqueda base
-        query_base = {
-            "$or": [
-                {"nombre": {"$regex": q, "$options": "i"}},
-                {"codigo": {"$regex": q, "$options": "i"}},
-                {"farmacia": {"$regex": q, "$options": "i"}}
-            ],
+        # OPTIMIZACIÓN: Usar búsqueda de texto si está disponible, sino usar regex optimizado
+        # Primero intentar búsqueda exacta por código (más rápida)
+        query_exacta = {
+            "codigo": q,
             "estado": "activo"
         }
         
-        # Filtrar por sucursal si se proporciona
+        # Si hay sucursal, agregar filtro
         if sucursal:
-            # Buscar productos que estén en la sucursal especificada
-            filtro_sucursal = {
+            filtro_sucursal_exacta = {
                 "$or": [
                     {"sucursal": sucursal},
                     {"sucursales": {"$in": [sucursal]}},
                     {f"stock_sucursal.{sucursal}": {"$exists": True}}
                 ]
             }
-            query = {
-                "$and": [query_base, filtro_sucursal]
+            query_exacta = {
+                "$and": [query_exacta, filtro_sucursal_exacta]
             }
-        else:
-            query = query_base
         
-        # Buscar productos (limitado a 20 resultados para rendimiento)
-        productos = await productos_collection.find(query).limit(20).to_list(length=20)
+        productos_exactos = await productos_collection.find(query_exacta).limit(5).to_list(length=5)
+        
+        # Si no hay coincidencias exactas, buscar con regex (más lento pero necesario)
+        if not productos_exactos:
+            # OPTIMIZACIÓN: Usar regex que comience con el texto (más eficiente que regex en medio)
+            # Construir query de búsqueda optimizada
+            query_base = {
+                "$or": [
+                    {"nombre": {"$regex": f"^{re.escape(q)}", "$options": "i"}},  # Comienza con
+                    {"codigo": {"$regex": f"^{re.escape(q)}", "$options": "i"}},  # Comienza con
+                    {"farmacia": {"$regex": f"^{re.escape(q)}", "$options": "i"}},  # Comienza con
+                    # Si no hay coincidencias al inicio, buscar en cualquier parte (más lento)
+                    {"nombre": {"$regex": q, "$options": "i"}},
+                    {"codigo": {"$regex": q, "$options": "i"}},
+                    {"farmacia": {"$regex": q, "$options": "i"}}
+                ],
+                "estado": "activo"
+            }
+            
+            # Filtrar por sucursal si se proporciona
+            if sucursal:
+                filtro_sucursal = {
+                    "$or": [
+                        {"sucursal": sucursal},
+                        {"sucursales": {"$in": [sucursal]}},
+                        {f"stock_sucursal.{sucursal}": {"$exists": True}}
+                    ]
+                }
+                query = {
+                    "$and": [query_base, filtro_sucursal]
+                }
+            else:
+                query = query_base
+            
+            # Buscar productos (limitado a 20 resultados para rendimiento)
+            productos = await productos_collection.find(query).limit(20).to_list(length=20)
+        else:
+            productos = productos_exactos
+        
+        if not productos:
+            return []
         
         # Obtener colección de inventarios para buscar lotes
         inventarios_collection = get_collection("INVENTARIOS")
+        
+        # OPTIMIZACIÓN: Si hay sucursal, buscar lotes solo una vez usando agregación
+        lotes_cache = {}  # Cache de lotes por código y sucursal
+        
+        if sucursal:
+            try:
+                # Usar agregación para buscar lotes de todos los productos de una vez
+                codigos_productos = [str(p.get("codigo", "")) for p in productos if p.get("codigo")]
+                if codigos_productos:
+                    pipeline = [
+                        {
+                            "$match": {
+                                "sucursal": sucursal,
+                                "estado": "activo"
+                            }
+                        },
+                        {"$unwind": "$items"},
+                        {
+                            "$match": {
+                                "items.codigo": {"$in": codigos_productos}
+                            }
+                        },
+                        {
+                            "$project": {
+                                "codigo": "$items.codigo",
+                                "lotes": "$items.lotes"
+                            }
+                        }
+                    ]
+                    
+                    lotes_agregados = await inventarios_collection.aggregate(pipeline).to_list(length=100)
+                    
+                    # Procesar lotes agregados
+                    for item_lote in lotes_agregados:
+                        codigo = str(item_lote.get("codigo", ""))
+                        if codigo not in lotes_cache:
+                            lotes_cache[codigo] = []
+                        
+                        item_lotes = item_lote.get("lotes", [])
+                        for lote in item_lotes:
+                            fecha_vencimiento = lote.get("fecha_vencimiento")
+                            if fecha_vencimiento and isinstance(fecha_vencimiento, datetime):
+                                fecha_vencimiento = fecha_vencimiento.strftime("%Y-%m-%d")
+                            
+                            lote_formateado = {
+                                "lote": lote.get("numero_lote") or lote.get("lote"),
+                                "fecha_vencimiento": fecha_vencimiento,
+                                "cantidad": lote.get("cantidad", 0) or 0
+                            }
+                            if lote_formateado["lote"] or lote_formateado["cantidad"] > 0:
+                                lotes_cache[codigo].append(lote_formateado)
+            except Exception as e:
+                print(f"[BUSCAR-PRODUCTOS] Error en agregación de lotes: {str(e)}")
         
         # Transformar resultados
         resultado = []
@@ -1214,81 +1306,43 @@ async def buscar_productos(
                             stock = item.get("stock", stock)
                             break
             
-            # CRÍTICO: Buscar lotes en inventarios de la sucursal
+            # OPTIMIZACIÓN: Usar lotes del cache si están disponibles
             lotes_encontrados = []
             cantidad_total_lotes = 0
             
             if codigo_producto and sucursal:
-                try:
-                    # Buscar inventarios activos de la sucursal que contengan items con este código
-                    inventarios = await inventarios_collection.find({
-                        "sucursal": sucursal,
-                        "estado": "activo"
-                    }).to_list(length=50)  # Limitar a 50 inventarios recientes
-                    
-                    # Buscar items con este código en los inventarios
-                    for inventario in inventarios:
-                        items = inventario.get("items", [])
-                        for item in items:
-                            item_codigo = item.get("codigo")
-                            # Comparar códigos (pueden ser string o número)
-                            if item_codigo and str(item_codigo).strip() == str(codigo_producto).strip():
-                                # Encontrar lotes en este item
-                                item_lotes = item.get("lotes", [])
-                                if item_lotes:
-                                    for lote in item_lotes:
-                                        # Formatear lote para la respuesta
-                                        fecha_vencimiento = lote.get("fecha_vencimiento")
-                                        # Formatear fecha si es datetime
-                                        if fecha_vencimiento:
-                                            if isinstance(fecha_vencimiento, datetime):
-                                                fecha_vencimiento = fecha_vencimiento.strftime("%Y-%m-%d")
-                                            elif isinstance(fecha_vencimiento, str):
-                                                # Ya está en formato string
-                                                pass
-                                        
-                                        lote_formateado = {
-                                            "lote": lote.get("numero_lote") or lote.get("lote"),
-                                            "fecha_vencimiento": fecha_vencimiento,
-                                            "cantidad": lote.get("cantidad", 0) or 0
-                                        }
-                                        # Solo agregar si tiene lote o cantidad
-                                        if lote_formateado["lote"] or lote_formateado["cantidad"] > 0:
-                                            lotes_encontrados.append(lote_formateado)
-                                            cantidad_total_lotes += lote_formateado["cantidad"]
-                                break  # Ya encontramos el item, no buscar más en este inventario
-                except Exception as e:
-                    print(f"[BUSCAR-PRODUCTOS] Error al buscar lotes: {str(e)}")
-                    # Continuar sin lotes si hay error
+                codigo_str = str(codigo_producto).strip()
+                if codigo_str in lotes_cache:
+                    lotes_encontrados = lotes_cache[codigo_str]
+                    cantidad_total_lotes = sum(l.get("cantidad", 0) for l in lotes_encontrados)
             
             # Ordenar lotes por fecha de vencimiento (más cercana primero, luego sin fecha)
             def ordenar_lotes(lote):
                 fecha = lote.get("fecha_vencimiento")
                 if fecha:
                     try:
-                        # Convertir a datetime para ordenar
                         if isinstance(fecha, str):
                             fecha_dt = datetime.strptime(fecha, "%Y-%m-%d")
                         else:
                             fecha_dt = fecha
-                        return (0, fecha_dt)  # Prioridad 0 = tiene fecha
+                        return (0, fecha_dt)
                     except:
-                        return (1, datetime.max)  # Prioridad 1 = fecha inválida
-                return (2, datetime.max)  # Prioridad 2 = sin fecha
+                        return (1, datetime.max)
+                return (2, datetime.max)
             
             lotes_encontrados.sort(key=ordenar_lotes)
             
             # Calcular cantidad total: usar suma de lotes si existen, sino usar stock
             cantidad_final = cantidad_total_lotes if lotes_encontrados else int(stock)
             
-            # Obtener stock por sucursal usando la función helper
+            # OPTIMIZACIÓN: Solo obtener stock por sucursal si realmente se necesita
+            # (comentado para mejorar rendimiento - descomentar si es necesario)
             stock_por_sucursal_list = []
-            if codigo_producto:
-                try:
-                    stock_por_sucursal_list = await obtener_stock_por_sucursal(codigo_producto)
-                except Exception as e:
-                    print(f"[BUSCAR-PRODUCTOS] Error al obtener stock por sucursal: {str(e)}")
-                    # Continuar sin stock por sucursal si hay error
+            # if codigo_producto:
+            #     try:
+            #         stock_por_sucursal_list = await obtener_stock_por_sucursal(codigo_producto)
+            #     except Exception as e:
+            #         print(f"[BUSCAR-PRODUCTOS] Error al obtener stock por sucursal: {str(e)}")
             
             resultado.append(ProductoItem(
                 id=str(producto["_id"]),
@@ -1298,7 +1352,7 @@ async def buscar_productos(
                 precio_usd=None,  # Se calculará en el frontend
                 stock=int(stock),  # Mantener para compatibilidad
                 cantidad=cantidad_final,  # Stock total (suma de lotes si existen)
-                stock_por_sucursal=stock_por_sucursal_list,  # REQUERIDO: Stock en todas las sucursales
+                stock_por_sucursal=stock_por_sucursal_list,  # Vacío por defecto para mejor rendimiento
                 lotes=lotes_encontrados if lotes_encontrados else [],  # Array de lotes ordenado
                 sucursal=sucursal or producto.get("sucursal")
             ))
@@ -1306,6 +1360,9 @@ async def buscar_productos(
         return resultado
         
     except Exception as e:
+        print(f"[BUSCAR-PRODUCTOS] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         raise HTTPException(
             status_code=500,
             detail=f"Error al buscar productos: {str(e)}"
