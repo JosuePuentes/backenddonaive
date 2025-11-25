@@ -2322,6 +2322,19 @@ async def obtener_ventas_usuario(
         filtro = {}
         condiciones_and = []
         
+        # Filtrar por estado: incluir facturas procesadas o facturas de devolución
+        # Según instrucciones: la nueva factura debe tener estado "procesada" para aparecer
+        # y también incluir facturas con es_devolucion: true
+        # También incluir facturas que no tienen estado "devuelta" (facturas normales)
+        condiciones_and.append({
+            "$or": [
+                {"estado": "procesada"},
+                {"es_devolucion": True},
+                {"estado": {"$ne": "devuelta"}},  # Incluir facturas normales que no están devueltas
+                {"estado": {"$exists": False}}  # Incluir facturas sin campo estado (legacy)
+            ]
+        })
+        
         # Filtrar por cajero
         if cajero:
             # Buscar por campo 'cajero' o 'usuario_registro'
@@ -2695,12 +2708,15 @@ async def procesar_devolucion(
                             )
             
             # 6. Crear nueva venta solo si hay diferencia a favor (nuevo total > devolución)
-            if diferencia_bs > 0.01:  # Tolerancia para decimales
+            # Validar usando diferencia_usd según instrucciones
+            diferencia_usd_calculada = diferencia_bs / devolucion.tasa_dia if devolucion.tasa_dia > 0 else diferencia_usd
+            
+            if diferencia_usd_calculada > 0.01:  # Solo procesar métodos de pago si diferencia_usd > 0.01
                 # Validar métodos de pago si se proporcionan
                 if not devolucion.metodos_pago or len(devolucion.metodos_pago) == 0:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Debe especificar métodos de pago. Diferencia a pagar: {diferencia_bs:.2f} Bs"
+                        detail=f"Debe especificar métodos de pago. Diferencia a pagar: ${diferencia_usd_calculada:.2f} USD"
                     )
                 
                 # Validar que los métodos de pago cubran la diferencia
@@ -2714,13 +2730,20 @@ async def procesar_devolucion(
                     else:
                         suma_metodos_usd += monto / devolucion.tasa_dia if devolucion.tasa_dia > 0 else 0
                 
-                diferencia_usd_calculada = diferencia_bs / devolucion.tasa_dia if devolucion.tasa_dia > 0 else 0
-                
-                if suma_metodos_usd < diferencia_usd_calculada - 0.01:
+                # Validar que el total pagado coincida exactamente con la diferencia
+                if abs(suma_metodos_usd - diferencia_usd_calculada) > 0.01:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Pago insuficiente. Diferencia: ${diferencia_usd_calculada:.2f} USD, Pagado: ${suma_metodos_usd:.2f} USD"
+                        detail=f"El total pagado no coincide con la diferencia. Diferencia: ${diferencia_usd_calculada:.2f} USD, Pagado: ${suma_metodos_usd:.2f} USD"
                     )
+                
+                # Validar que métodos de pago con tipo "banco" incluyan banco_id
+                for mp in devolucion.metodos_pago:
+                    if mp.tipo == "banco" and not mp.banco_id:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"El método de pago tipo 'banco' debe incluir banco_id para actualizar saldos"
+                        )
                 
                 # Generar número de factura para la nueva venta
                 fecha_actual = datetime.now().strftime("%Y-%m-%d")
@@ -2743,7 +2766,9 @@ async def procesar_devolucion(
                     "notas": f"Devolución de venta {venta_original.get('numero_factura', devolucion.venta_original_id)}. {devolucion.notas or ''}",
                     "usuario_registro": usuario.get("correo", usuario.get("usuarioCorreo")),
                     "venta_devolucion_id": str(venta_original_oid),
-                    "tipo": "devolucion"
+                    "tipo": "devolucion",
+                    "estado": "procesada",  # Estado necesario para que aparezca en la lista
+                    "es_devolucion": True  # Marca para identificar facturas de devolución
                 }
                 
                 result = await ventas_collection.insert_one(nueva_venta_doc)
