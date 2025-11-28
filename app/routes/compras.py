@@ -152,6 +152,120 @@ async def crear_proveedor(
         )
 
 
+@router.put("/proveedores/{proveedor_id}", response_model=ProveedorResponse)
+@router.patch("/proveedores/{proveedor_id}", response_model=ProveedorResponse)
+async def actualizar_proveedor(
+    proveedor_id: str,
+    proveedor_data: ProveedorCreate,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Actualizar un proveedor existente.
+    Requiere autenticación.
+    """
+    try:
+        proveedores_collection = get_collection("PROVEEDORES")
+        
+        # Intentar convertir a ObjectId
+        try:
+            oid = ObjectId(proveedor_id)
+        except InvalidId:
+            raise HTTPException(
+                status_code=400,
+                detail="ID de proveedor inválido"
+            )
+        
+        # Verificar que el proveedor existe
+        proveedor_existente = await proveedores_collection.find_one({"_id": oid})
+        if not proveedor_existente:
+            raise HTTPException(
+                status_code=404,
+                detail="Proveedor no encontrado"
+            )
+        
+        # Validar que el nombre no esté vacío
+        nombre = proveedor_data.nombre.strip()
+        if not nombre:
+            raise HTTPException(
+                status_code=400,
+                detail="El nombre del proveedor es requerido"
+            )
+        
+        # Validar que el nombre no esté duplicado (si se está cambiando)
+        if nombre.lower() != proveedor_existente.get("nombre", "").lower():
+            proveedor_con_nombre = await proveedores_collection.find_one({
+                "nombre": {"$regex": f"^{nombre}$", "$options": "i"},
+                "_id": {"$ne": oid}  # Excluir el proveedor actual
+            })
+            if proveedor_con_nombre:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Ya existe otro proveedor con el nombre {nombre}"
+                )
+        
+        # Validar formato de email si se proporciona
+        if proveedor_data.email:
+            import re
+            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            if not re.match(email_pattern, proveedor_data.email):
+                raise HTTPException(
+                    status_code=400,
+                    detail="El formato del email no es válido"
+                )
+        
+        # Preparar datos de actualización
+        update_data = {
+            "nombre": nombre,
+            "rif": proveedor_data.rif,
+            "telefono": proveedor_data.telefono,
+            "email": proveedor_data.email,
+            "direccion": proveedor_data.direccion,
+            "contacto": proveedor_data.contacto,
+            "notas": proveedor_data.notas,
+            "fecha_actualizacion": datetime.now(),
+            "usuario_actualizacion": usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
+        }
+        
+        # Remover campos None para no sobrescribir con None
+        update_data = {k: v for k, v in update_data.items() if v is not None}
+        
+        # Actualizar proveedor
+        result = await proveedores_collection.update_one(
+            {"_id": oid},
+            {"$set": update_data}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="Proveedor no encontrado"
+            )
+        
+        # Obtener el proveedor actualizado
+        proveedor_actualizado = await proveedores_collection.find_one({"_id": oid})
+        proveedor_actualizado["_id"] = str(proveedor_actualizado["_id"])
+        
+        if proveedor_actualizado.get("fecha_creacion"):
+            if isinstance(proveedor_actualizado["fecha_creacion"], datetime):
+                proveedor_actualizado["fecha_creacion"] = proveedor_actualizado["fecha_creacion"].strftime("%Y-%m-%d %H:%M:%S")
+        if proveedor_actualizado.get("fecha_actualizacion"):
+            if isinstance(proveedor_actualizado["fecha_actualizacion"], datetime):
+                proveedor_actualizado["fecha_actualizacion"] = proveedor_actualizado["fecha_actualizacion"].strftime("%Y-%m-%d %H:%M:%S")
+        
+        return ProveedorResponse(**proveedor_actualizado)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ACTUALIZAR-PROVEEDOR] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al actualizar proveedor: {str(e)}"
+        )
+
+
 @router.get("/productos")
 async def buscar_productos_compra(
     search: str = Query(..., description="Query de búsqueda (nombre o código)"),
