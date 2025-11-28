@@ -5,12 +5,14 @@ from app.schemas.compras import (
     ProveedorCreate, 
     ProveedorResponse, 
     CompraCreate, 
-    CompraResponse
+    CompraResponse,
+    PagoCompraCreate,
+    PagoCompraResponse
 )
 from bson import ObjectId
 from bson.errors import InvalidId
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 router = APIRouter()
 
@@ -424,13 +426,45 @@ async def crear_compra(
                 detail="La tasa de cambio es requerida cuando la divisa es BS"
             )
         
+        # Normalizar sucursal_id y sucursal (usar sucursal_id si viene, sino sucursal)
+        sucursal_final = compra.sucursal_id or compra.sucursal
+        
+        # Calcular IVA si lleva_iva es True
+        iva_calculado = 0.0
+        total_con_iva = compra.total
+        if compra.lleva_iva:
+            # IVA = 16% sobre el total (costo ajustado)
+            iva_calculado = compra.total * 0.16
+            total_con_iva = compra.total + iva_calculado
+            print(f"[CREAR-COMPRA] IVA calculado: {iva_calculado} (16% de {compra.total})")
+        
+        # Obtener días de crédito del proveedor
+        dias_credito_proveedor = proveedor.get("dias_credito", 0) or 0
+        
+        # Calcular fecha_vencimiento_factura si no viene y hay días de crédito
+        fecha_vencimiento = compra.fecha_vencimiento_factura
+        if not fecha_vencimiento and dias_credito_proveedor > 0:
+            fecha_compra_obj = datetime.strptime(compra.fecha_compra, "%Y-%m-%d")
+            fecha_vencimiento = (fecha_compra_obj + timedelta(days=dias_credito_proveedor)).strftime("%Y-%m-%d")
+            print(f"[CREAR-COMPRA] Fecha vencimiento calculada: {fecha_vencimiento} (días crédito: {dias_credito_proveedor})")
+        
         # Crear registro de compra
         compras_collection = get_collection("COMPRAS")
         compra_dict = compra.dict()
         compra_dict["proveedor_nombre"] = proveedor_nombre
+        compra_dict["sucursal"] = sucursal_final
+        compra_dict["sucursal_id"] = sucursal_final
+        compra_dict["lleva_iva"] = compra.lleva_iva or False
+        compra_dict["iva"] = iva_calculado
+        compra_dict["total_con_iva"] = total_con_iva
+        compra_dict["fecha_vencimiento_factura"] = fecha_vencimiento
+        compra_dict["dias_credito"] = dias_credito_proveedor
         compra_dict["usuario_creacion"] = usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
         compra_dict["fecha_creacion"] = datetime.now().isoformat()
         compra_dict["estado"] = "activa"
+        compra_dict["estado_pago"] = "sin_pago"
+        compra_dict["monto_pagado"] = 0.0
+        compra_dict["monto_pendiente"] = total_con_iva
         
         # Convertir items a dict para guardar
         items_dict = []
@@ -453,8 +487,8 @@ async def crear_compra(
             "farmacia": compra.farmacia,
             "estado": "activo"
         }
-        if compra.sucursal:
-            query_inventario["sucursal"] = compra.sucursal
+        if sucursal_final:
+            query_inventario["sucursal"] = sucursal_final
         
         # Buscar inventario activo más reciente
         inventario_existente = await inventarios_collection.find_one(
@@ -475,7 +509,7 @@ async def crear_compra(
             # Crear nuevo inventario
             inventario_nuevo = {
                 "farmacia": compra.farmacia,
-                "sucursal": compra.sucursal,
+                "sucursal": sucursal_final,
                 "costo": 0.0,
                 "usuarioCorreo": usuario.get("correo", usuario.get("usuarioCorreo", "unknown")),
                 "fecha": datetime.now().strftime("%Y-%m-%d"),
@@ -697,6 +731,28 @@ async def crear_compra(
         compra_creada = await compras_collection.find_one({"_id": ObjectId(compra_id)})
         compra_creada["_id"] = str(compra_creada["_id"])
         
+        # Calcular días de crédito y mora
+        dias_credito, dias_mora = calcular_dias_credito_y_mora(
+            compra_creada.get("fecha_compra", ""),
+            compra_creada.get("fecha_vencimiento_factura"),
+            compra_creada.get("dias_credito", 0) or 0
+        )
+        compra_creada["dias_credito"] = dias_credito
+        compra_creada["dias_mora"] = dias_mora
+        
+        # Asegurar que todos los campos estén presentes
+        compra_creada["lleva_iva"] = compra_creada.get("lleva_iva", False)
+        compra_creada["iva"] = compra_creada.get("iva", 0) or 0
+        compra_creada["total_con_iva"] = compra_creada.get("total_con_iva") or compra_creada.get("total", 0)
+        compra_creada["sucursal_id"] = compra_creada.get("sucursal_id") or compra_creada.get("sucursal")
+        compra_creada["estado_pago"] = compra_creada.get("estado_pago", "sin_pago")
+        compra_creada["monto_pagado"] = compra_creada.get("monto_pagado", 0) or 0
+        compra_creada["monto_pendiente"] = compra_creada.get("monto_pendiente") or compra_creada["total_con_iva"]
+        
+        if compra_creada.get("fecha_creacion"):
+            if isinstance(compra_creada["fecha_creacion"], datetime):
+                compra_creada["fecha_creacion"] = compra_creada["fecha_creacion"].isoformat()
+        
         return CompraResponse(**compra_creada)
         
     except HTTPException:
@@ -713,5 +769,225 @@ async def crear_compra(
         raise HTTPException(
             status_code=500,
             detail=f"Error al crear compra: {str(e)}"
+        )
+
+
+def calcular_estado_pago(monto_total: float, monto_pagado: float) -> str:
+    """Calcula el estado de pago de una compra"""
+    if monto_pagado <= 0:
+        return "sin_pago"
+    elif monto_pagado >= monto_total:
+        return "pagada"
+    else:
+        return "abonado"
+
+
+def calcular_dias_credito_y_mora(fecha_compra: str, fecha_vencimiento: Optional[str], dias_credito: int) -> tuple:
+    """Calcula días de crédito y días de mora"""
+    try:
+        fecha_actual = datetime.now().date()
+        fecha_compra_obj = datetime.strptime(fecha_compra, "%Y-%m-%d").date()
+        
+        if fecha_vencimiento:
+            fecha_vencimiento_obj = datetime.strptime(fecha_vencimiento, "%Y-%m-%d").date()
+        elif dias_credito > 0:
+            fecha_vencimiento_obj = fecha_compra_obj + timedelta(days=dias_credito)
+        else:
+            return (0, 0)
+        
+        dias_mora = 0
+        if fecha_actual > fecha_vencimiento_obj:
+            dias_mora = (fecha_actual - fecha_vencimiento_obj).days
+        
+        return (dias_credito, dias_mora)
+    except Exception as e:
+        print(f"[CALCULAR-DIAS] Error: {str(e)}")
+        return (0, 0)
+
+
+@router.get("/compras", response_model=List[CompraResponse])
+async def listar_compras(
+    skip: int = Query(0, ge=0, description="Número de registros a saltar"),
+    limit: int = Query(50, ge=1, le=100, description="Número máximo de registros a devolver"),
+    sucursal_id: Optional[str] = Query(None, description="Filtrar por ID de sucursal"),
+    estado: Optional[str] = Query(None, description="Filtrar por estado (activa, cancelada)"),
+    estado_pago: Optional[str] = Query(None, description="Filtrar por estado de pago (sin_pago, abonado, pagada)"),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Listar todas las compras con paginación y filtros.
+    Requiere permiso: compras
+    """
+    verificar_permiso(usuario, "compras")
+    
+    try:
+        compras_collection = get_collection("COMPRAS")
+        
+        # Construir query de filtrado
+        query = {}
+        if sucursal_id:
+            query["$or"] = [
+                {"sucursal_id": sucursal_id},
+                {"sucursal": sucursal_id}
+            ]
+        if estado:
+            query["estado"] = estado
+        if estado_pago:
+            query["estado_pago"] = estado_pago
+        
+        # Obtener compras con paginación
+        compras = await compras_collection.find(query).skip(skip).limit(limit).sort("fecha_creacion", -1).to_list(length=limit)
+        
+        # Formatear resultados y calcular estados
+        resultado = []
+        for compra in compras:
+            compra["_id"] = str(compra["_id"])
+            
+            # Calcular estado de pago si no existe
+            monto_total = compra.get("total_con_iva") or compra.get("total", 0)
+            monto_pagado = compra.get("monto_pagado", 0) or 0
+            if not compra.get("estado_pago"):
+                compra["estado_pago"] = calcular_estado_pago(monto_total, monto_pagado)
+            
+            # Calcular monto pendiente
+            compra["monto_pendiente"] = monto_total - monto_pagado
+            
+            # Calcular días de crédito y mora
+            dias_credito, dias_mora = calcular_dias_credito_y_mora(
+                compra.get("fecha_compra", ""),
+                compra.get("fecha_vencimiento_factura"),
+                compra.get("dias_credito", 0) or 0
+            )
+            compra["dias_credito"] = dias_credito
+            compra["dias_mora"] = dias_mora
+            
+            # Normalizar campos
+            compra["lleva_iva"] = compra.get("lleva_iva", False)
+            compra["iva"] = compra.get("iva", 0) or 0
+            compra["total_con_iva"] = compra.get("total_con_iva") or compra.get("total", 0)
+            compra["sucursal_id"] = compra.get("sucursal_id") or compra.get("sucursal")
+            
+            if compra.get("fecha_creacion"):
+                if isinstance(compra["fecha_creacion"], datetime):
+                    compra["fecha_creacion"] = compra["fecha_creacion"].isoformat()
+            
+            resultado.append(CompraResponse(**compra))
+        
+        return resultado
+        
+    except Exception as e:
+        print(f"[LISTAR-COMPRAS] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al listar compras: {str(e)}"
+        )
+
+
+@router.post("/compras/{compra_id}/pagos", response_model=PagoCompraResponse, status_code=201)
+async def crear_pago_compra(
+    compra_id: str,
+    pago: PagoCompraCreate,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Crear un pago para una compra.
+    Actualiza automáticamente el estado de pago de la compra.
+    Requiere permiso: compras
+    """
+    verificar_permiso(usuario, "compras")
+    
+    try:
+        # Validar que la compra existe
+        compras_collection = get_collection("COMPRAS")
+        try:
+            compra_oid = ObjectId(compra_id)
+        except InvalidId:
+            raise HTTPException(
+                status_code=400,
+                detail="ID de compra inválido"
+            )
+        
+        compra = await compras_collection.find_one({"_id": compra_oid})
+        if not compra:
+            raise HTTPException(
+                status_code=404,
+                detail="Compra no encontrada"
+            )
+        
+        # Validar que la compra no esté cancelada
+        if compra.get("estado") == "cancelada":
+            raise HTTPException(
+                status_code=400,
+                detail="No se pueden registrar pagos para compras canceladas"
+            )
+        
+        # Obtener montos
+        monto_total = compra.get("total_con_iva") or compra.get("total", 0)
+        monto_pagado_actual = compra.get("monto_pagado", 0) or 0
+        nuevo_monto_pagado = monto_pagado_actual + pago.monto
+        
+        # Validar que no se pague más del total
+        if nuevo_monto_pagado > monto_total + 0.01:  # Tolerancia para decimales
+            raise HTTPException(
+                status_code=400,
+                detail=f"El monto del pago excede el total pendiente. Total: {monto_total}, Pagado: {monto_pagado_actual}, Pendiente: {monto_total - monto_pagado_actual}"
+            )
+        
+        # Crear registro de pago
+        pagos_collection = get_collection("PAGOS_COMPRAS")
+        pago_dict = pago.dict()
+        pago_dict["compra_id"] = compra_id
+        pago_dict["usuario_creacion"] = usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
+        pago_dict["fecha_creacion"] = datetime.now().isoformat()
+        
+        result_pago = await pagos_collection.insert_one(pago_dict)
+        pago_id = str(result_pago.inserted_id)
+        
+        print(f"[CREAR-PAGO-COMPRA] Pago creado con ID: {pago_id} para compra {compra_id}")
+        
+        # Actualizar compra con nuevo monto pagado y estado
+        nuevo_estado_pago = calcular_estado_pago(monto_total, nuevo_monto_pagado)
+        monto_pendiente = monto_total - nuevo_monto_pagado
+        
+        await compras_collection.update_one(
+            {"_id": compra_oid},
+            {
+                "$set": {
+                    "monto_pagado": nuevo_monto_pagado,
+                    "monto_pendiente": monto_pendiente,
+                    "estado_pago": nuevo_estado_pago,
+                    "fecha_ultimo_pago": datetime.now().isoformat()
+                }
+            }
+        )
+        
+        print(f"[CREAR-PAGO-COMPRA] Compra actualizada: estado_pago={nuevo_estado_pago}, monto_pagado={nuevo_monto_pagado}")
+        
+        # Obtener el pago creado
+        pago_creado = await pagos_collection.find_one({"_id": ObjectId(pago_id)})
+        pago_creado["_id"] = str(pago_creado["_id"])
+        
+        if pago_creado.get("fecha_creacion"):
+            if isinstance(pago_creado["fecha_creacion"], datetime):
+                pago_creado["fecha_creacion"] = pago_creado["fecha_creacion"].isoformat()
+        
+        return PagoCompraResponse(**pago_creado)
+        
+    except HTTPException:
+        raise
+    except InvalidId as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"ID inválido: {str(e)}"
+        )
+    except Exception as e:
+        print(f"[CREAR-PAGO-COMPRA] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al crear pago: {str(e)}"
         )
 
