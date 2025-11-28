@@ -15,6 +15,16 @@ from datetime import datetime
 router = APIRouter()
 
 
+def verificar_permiso(usuario: dict, permiso: str):
+    """Verifica si el usuario tiene un permiso específico"""
+    permisos = usuario.get("permisos", [])
+    if permiso not in permisos and "admin_completo" not in permisos:
+        raise HTTPException(
+            status_code=403,
+            detail=f"No tienes permisos para realizar esta acción. Se requiere: {permiso}"
+        )
+
+
 @router.get("/proveedores", response_model=List[ProveedorResponse])
 async def listar_proveedores(
     skip: int = Query(0, ge=0, description="Número de registros a saltar"),
@@ -142,6 +152,70 @@ async def crear_proveedor(
         )
 
 
+@router.get("/productos")
+async def buscar_productos_compra(
+    search: str = Query(..., description="Query de búsqueda (nombre o código)"),
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Buscar productos por nombre o código para el módulo de compras.
+    Requiere permiso: compras
+    """
+    verificar_permiso(usuario, "compras")
+    
+    search = search.strip() if search else ""
+    if len(search) < 2:
+        return []
+    
+    try:
+        productos_collection = get_collection("PRODUCTOS")
+        
+        # Intentar usar PRODUCTOS, si no existe usar INVENTARIOS
+        try:
+            await productos_collection.find_one({})
+        except:
+            productos_collection = get_collection("INVENTARIOS")
+        
+        # Búsqueda exacta por código primero
+        query_exacta = {
+            "codigo": search,
+            "estado": "activo"
+        }
+        
+        productos_exactos = await productos_collection.find(query_exacta).limit(10).to_list(length=10)
+        
+        if productos_exactos:
+            resultado = []
+            for producto in productos_exactos:
+                producto["_id"] = str(producto["_id"])
+                resultado.append(producto)
+            return resultado
+        
+        # Si no hay coincidencias exactas, buscar por nombre
+        query_nombre = {
+            "nombre": {"$regex": search, "$options": "i"},
+            "estado": "activo"
+        }
+        
+        productos = await productos_collection.find(query_nombre).limit(20).to_list(length=20)
+        
+        resultado = []
+        for producto in productos:
+            producto["_id"] = str(producto["_id"])
+            resultado.append(producto)
+        
+        return resultado
+        
+    except Exception as e:
+        print(f"[BUSCAR-PRODUCTOS-COMPRA] Error: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al buscar productos: {str(e)}"
+        )
+
+
 @router.post("/compras", response_model=CompraResponse, status_code=201)
 async def crear_compra(
     compra: CompraCreate,
@@ -151,15 +225,22 @@ async def crear_compra(
     Crear una nueva compra y actualizar el inventario.
     
     La compra:
-    1. Valida que el proveedor exista
-    2. Crea un registro de compra en la colección COMPRAS
-    3. Busca o crea un inventario activo para la farmacia/sucursal
-    4. Agrega los items de la compra al inventario
-    5. Actualiza el costo total del inventario
-    6. Maneja lotes si se proporcionan
+    1. Valida permisos (requiere permiso 'compras')
+    2. Valida que el proveedor exista
+    3. Crea un registro de compra en la colección COMPRAS
+    4. Busca o crea un inventario activo para la farmacia/sucursal
+    5. Para cada item:
+       - Si el producto existe en el inventario, actualiza cantidad y costo
+       - Si el producto tiene lotes existentes, agrega el nuevo lote a los existentes
+       - Si el producto no existe, crea un nuevo item
+    6. Crea o actualiza productos en la colección PRODUCTOS
+    7. Actualiza el costo total del inventario
     
-    Requiere autenticación.
+    Requiere permiso: compras
     """
+    # Validar permisos
+    verificar_permiso(usuario, "compras")
+    
     try:
         # Validar que el proveedor existe
         proveedores_collection = get_collection("PROVEEDORES")
@@ -258,8 +339,10 @@ async def crear_compra(
             inventario_id = str(result_inventario.inserted_id)
             print(f"[CREAR-COMPRA] Nuevo inventario creado: {inventario_id}")
         
-        # Procesar items de la compra y agregarlos al inventario
+        # Procesar items de la compra y actualizar/agregar al inventario
+        productos_collection = get_collection("PRODUCTOS")
         nuevos_items = []
+        productos_actualizados = []
         costo_total_compra = 0.0
         
         for item_compra in compra.items:
@@ -267,39 +350,181 @@ async def crear_compra(
             costo_item = item_compra.costo_unitario * item_compra.cantidad
             costo_total_compra += costo_item
             
-            # Crear item de inventario
-            item_inventario = {
-                "item_id": str(ObjectId()),  # Generar ID único
-                "codigo": item_compra.codigo,
-                "nombre": item_compra.nombre,
-                "descripcion": item_compra.descripcion or item_compra.nombre,
-                "cantidad": item_compra.cantidad,
-                "costo_unitario": item_compra.costo_unitario,
-                "precio_unitario": item_compra.precio_unitario or item_compra.costo_unitario,
-                "costo": costo_item,
-                "precio": (item_compra.precio_unitario or item_compra.costo_unitario) * item_compra.cantidad,
-                "utilidad_contable": (
-                    (item_compra.precio_unitario or item_compra.costo_unitario) - item_compra.costo_unitario
-                ) * item_compra.cantidad if item_compra.precio_unitario else 0,
-                "inventario_id": inventario_id,
-                "compra_id": compra_id  # Referencia a la compra
-            }
+            # Buscar si el producto ya existe en el inventario (por código)
+            item_existente_idx = None
+            item_existente = None
+            for idx, item in enumerate(items_inventario):
+                if item.get("codigo") == item_compra.codigo:
+                    item_existente_idx = idx
+                    item_existente = item
+                    break
             
-            # Agregar lotes si se proporcionan
-            if item_compra.lote or item_compra.fecha_vencimiento:
-                lotes = []
-                lote = {
-                    "numero_lote": item_compra.lote or f"LOTE-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                    "fecha_vencimiento": item_compra.fecha_vencimiento,
+            if item_existente:
+                # Producto existe: actualizar cantidad y costo
+                print(f"[CREAR-COMPRA] Producto existente encontrado: {item_compra.codigo}, actualizando...")
+                
+                # Calcular nuevo costo unitario promedio (promedio ponderado)
+                cantidad_anterior = item_existente.get("cantidad", 0)
+                costo_anterior = item_existente.get("costo", 0)
+                costo_unitario_anterior = item_existente.get("costo_unitario", 0)
+                
+                cantidad_total = cantidad_anterior + item_compra.cantidad
+                costo_total_nuevo = costo_anterior + costo_item
+                costo_unitario_promedio = costo_total_nuevo / cantidad_total if cantidad_total > 0 else item_compra.costo_unitario
+                
+                # Actualizar item existente
+                items_inventario[item_existente_idx]["cantidad"] = cantidad_total
+                items_inventario[item_existente_idx]["costo"] = costo_total_nuevo
+                items_inventario[item_existente_idx]["costo_unitario"] = costo_unitario_promedio
+                
+                # Actualizar precio unitario si se proporciona uno nuevo
+                if item_compra.precio_unitario:
+                    items_inventario[item_existente_idx]["precio_unitario"] = item_compra.precio_unitario
+                
+                precio_unitario_final = items_inventario[item_existente_idx].get("precio_unitario", costo_unitario_promedio)
+                items_inventario[item_existente_idx]["precio"] = precio_unitario_final * cantidad_total
+                items_inventario[item_existente_idx]["utilidad_contable"] = (
+                    precio_unitario_final - costo_unitario_promedio
+                ) * cantidad_total if precio_unitario_final > 0 else 0
+                
+                # Manejar lotes: agregar a lotes existentes o crear nuevo array
+                if item_compra.lote or item_compra.fecha_vencimiento:
+                    lotes_existentes = items_inventario[item_existente_idx].get("lotes", [])
+                    if not isinstance(lotes_existentes, list):
+                        lotes_existentes = []
+                    
+                    nuevo_lote = {
+                        "numero_lote": item_compra.lote or f"LOTE-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                        "fecha_vencimiento": item_compra.fecha_vencimiento,
+                        "cantidad": item_compra.cantidad,
+                        "costo_unitario": item_compra.costo_unitario,
+                        "precio_unitario": item_compra.precio_unitario or item_compra.costo_unitario
+                    }
+                    lotes_existentes.append(nuevo_lote)
+                    items_inventario[item_existente_idx]["lotes"] = lotes_existentes
+                    print(f"[CREAR-COMPRA] Lote agregado a producto existente: {nuevo_lote['numero_lote']}")
+                
+                # Actualizar referencia a compra
+                compras_ids = items_inventario[item_existente_idx].get("compras_ids", [])
+                if not isinstance(compras_ids, list):
+                    compras_ids = []
+                if compra_id not in compras_ids:
+                    compras_ids.append(compra_id)
+                items_inventario[item_existente_idx]["compras_ids"] = compras_ids
+                
+            else:
+                # Producto no existe: crear nuevo item
+                print(f"[CREAR-COMPRA] Producto nuevo: {item_compra.codigo}, creando...")
+                
+                item_inventario = {
+                    "item_id": str(ObjectId()),  # Generar ID único
+                    "codigo": item_compra.codigo,
+                    "nombre": item_compra.nombre,
+                    "descripcion": item_compra.descripcion or item_compra.nombre,
                     "cantidad": item_compra.cantidad,
                     "costo_unitario": item_compra.costo_unitario,
-                    "precio_unitario": item_compra.precio_unitario or item_compra.costo_unitario
+                    "precio_unitario": item_compra.precio_unitario or item_compra.costo_unitario,
+                    "costo": costo_item,
+                    "precio": (item_compra.precio_unitario or item_compra.costo_unitario) * item_compra.cantidad,
+                    "utilidad_contable": (
+                        (item_compra.precio_unitario or item_compra.costo_unitario) - item_compra.costo_unitario
+                    ) * item_compra.cantidad if item_compra.precio_unitario else 0,
+                    "inventario_id": inventario_id,
+                    "compra_id": compra_id,  # Referencia a la compra
+                    "compras_ids": [compra_id]
                 }
-                lotes.append(lote)
-                item_inventario["lotes"] = lotes
+                
+                # Agregar lotes si se proporcionan
+                if item_compra.lote or item_compra.fecha_vencimiento:
+                    lotes = []
+                    lote = {
+                        "numero_lote": item_compra.lote or f"LOTE-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                        "fecha_vencimiento": item_compra.fecha_vencimiento,
+                        "cantidad": item_compra.cantidad,
+                        "costo_unitario": item_compra.costo_unitario,
+                        "precio_unitario": item_compra.precio_unitario or item_compra.costo_unitario
+                    }
+                    lotes.append(lote)
+                    item_inventario["lotes"] = lotes
+                
+                nuevos_items.append(item_inventario)
+                items_inventario.append(item_inventario)
             
-            nuevos_items.append(item_inventario)
-            items_inventario.append(item_inventario)
+            # Crear o actualizar producto en la colección PRODUCTOS
+            try:
+                producto_existente = await productos_collection.find_one({
+                    "codigo": item_compra.codigo,
+                    "estado": "activo"
+                })
+                
+                if producto_existente:
+                    # Actualizar producto existente
+                    precio_unitario_final = item_compra.precio_unitario or item_compra.costo_unitario
+                    stock_actual = producto_existente.get("stock", 0) or 0
+                    stock_nuevo = stock_actual + item_compra.cantidad
+                    
+                    # Actualizar stock por sucursal si hay sucursal
+                    stock_sucursal = producto_existente.get("stock_sucursal", {})
+                    if not isinstance(stock_sucursal, dict):
+                        stock_sucursal = {}
+                    
+                    if compra.sucursal:
+                        stock_anterior_sucursal = stock_sucursal.get(compra.sucursal, 0) or 0
+                        stock_sucursal[compra.sucursal] = stock_anterior_sucursal + item_compra.cantidad
+                    
+                    # Actualizar sucursales
+                    sucursales = producto_existente.get("sucursales", [])
+                    if not isinstance(sucursales, list):
+                        sucursales = []
+                    if compra.sucursal and compra.sucursal not in sucursales:
+                        sucursales.append(compra.sucursal)
+                    
+                    await productos_collection.update_one(
+                        {"_id": producto_existente["_id"]},
+                        {
+                            "$set": {
+                                "nombre": item_compra.nombre,
+                                "precio": precio_unitario_final,
+                                "costo": item_compra.costo_unitario,
+                                "stock": stock_nuevo,
+                                "stock_sucursal": stock_sucursal,
+                                "sucursal": compra.sucursal or producto_existente.get("sucursal"),
+                                "sucursales": sucursales,
+                                "fecha_actualizacion": datetime.now().isoformat(),
+                                "usuario_actualizacion": usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
+                            }
+                        }
+                    )
+                    productos_actualizados.append(item_compra.codigo)
+                    print(f"[CREAR-COMPRA] Producto actualizado en PRODUCTOS: {item_compra.codigo}")
+                else:
+                    # Crear nuevo producto
+                    precio_unitario_final = item_compra.precio_unitario or item_compra.costo_unitario
+                    stock_sucursal = {}
+                    if compra.sucursal:
+                        stock_sucursal[compra.sucursal] = item_compra.cantidad
+                    
+                    nuevo_producto = {
+                        "codigo": item_compra.codigo,
+                        "nombre": item_compra.nombre,
+                        "descripcion": item_compra.descripcion or item_compra.nombre,
+                        "precio": precio_unitario_final,
+                        "costo": item_compra.costo_unitario,
+                        "stock": item_compra.cantidad,
+                        "stock_sucursal": stock_sucursal,
+                        "sucursal": compra.sucursal,
+                        "sucursales": [compra.sucursal] if compra.sucursal else [],
+                        "estado": "activo",
+                        "fecha_creacion": datetime.now().isoformat(),
+                        "usuario_creacion": usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
+                    }
+                    
+                    await productos_collection.insert_one(nuevo_producto)
+                    productos_actualizados.append(item_compra.codigo)
+                    print(f"[CREAR-COMPRA] Nuevo producto creado en PRODUCTOS: {item_compra.codigo}")
+            except Exception as e:
+                # Si falla la actualización de PRODUCTOS, continuar (no es crítico)
+                print(f"[CREAR-COMPRA] Advertencia: Error al actualizar PRODUCTOS para {item_compra.codigo}: {str(e)}")
         
         # Actualizar inventario con los nuevos items y costo total
         costo_total_inventario += costo_total_compra
@@ -317,7 +542,7 @@ async def crear_compra(
             update_inventario
         )
         
-        print(f"[CREAR-COMPRA] Inventario actualizado: {inventario_id}, {len(nuevos_items)} items agregados")
+        print(f"[CREAR-COMPRA] Inventario actualizado: {inventario_id}, {len(nuevos_items)} items nuevos, {len(productos_actualizados)} productos procesados")
         
         # Obtener la compra creada para retornarla
         compra_creada = await compras_collection.find_one({"_id": ObjectId(compra_id)})
