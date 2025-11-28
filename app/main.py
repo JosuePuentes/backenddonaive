@@ -55,6 +55,7 @@ try:
     from app.routes.cuadres import router as cuadres
     from app.routes.punto_venta import router as punto_venta_router
     from app.routes.clientes import router as clientes_router
+    from app.routes.compras import router as compras_router
     from app.core.get_current_user import get_current_user
     from app.db.mongo import get_collection
     from bson import ObjectId
@@ -883,6 +884,7 @@ try:
     app.include_router(cuadres, prefix="/api/cuadres", tags=["cuadres"])
     app.include_router(punto_venta_router, prefix="/punto-venta", tags=["punto-venta"])
     app.include_router(clientes_router, tags=["clientes"])
+    app.include_router(compras_router, tags=["compras"])
 
 except Exception as e:
     print(f"Error importing complex dependencies: {e}")
