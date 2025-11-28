@@ -54,6 +54,12 @@ async def listar_proveedores(
         resultado = []
         for proveedor in proveedores:
             proveedor["_id"] = str(proveedor["_id"])
+            
+            # Normalizar campos numéricos: si vienen como None o undefined, asignar 0
+            proveedor["dias_credito"] = proveedor.get("dias_credito") if proveedor.get("dias_credito") is not None else 0
+            proveedor["descuento_comercial"] = proveedor.get("descuento_comercial") if proveedor.get("descuento_comercial") is not None else 0.0
+            proveedor["descuento_pronto_pago"] = proveedor.get("descuento_pronto_pago") if proveedor.get("descuento_pronto_pago") is not None else 0.0
+            
             if proveedor.get("fecha_creacion"):
                 if isinstance(proveedor["fecha_creacion"], datetime):
                     proveedor["fecha_creacion"] = proveedor["fecha_creacion"].strftime("%Y-%m-%d %H:%M:%S")
@@ -62,6 +68,8 @@ async def listar_proveedores(
                     proveedor["fecha_actualizacion"] = proveedor["fecha_actualizacion"].strftime("%Y-%m-%d %H:%M:%S")
             
             resultado.append(ProveedorResponse(**proveedor))
+        
+        print(f"[LISTAR-PROVEEDORES] Proveedores cargados: {len(resultado)} proveedores")
         
         return resultado
         
@@ -118,10 +126,18 @@ async def crear_proveedor(
         
         # Crear documento del proveedor
         proveedor_dict = proveedor.dict()
+        
+        # Normalizar campos numéricos: si vienen como None o undefined, asignar 0
+        proveedor_dict["dias_credito"] = proveedor_dict.get("dias_credito") if proveedor_dict.get("dias_credito") is not None else 0
+        proveedor_dict["descuento_comercial"] = proveedor_dict.get("descuento_comercial") if proveedor_dict.get("descuento_comercial") is not None else 0.0
+        proveedor_dict["descuento_pronto_pago"] = proveedor_dict.get("descuento_pronto_pago") if proveedor_dict.get("descuento_pronto_pago") is not None else 0.0
+        
         proveedor_dict["fecha_creacion"] = datetime.now()
         proveedor_dict["fecha_actualizacion"] = datetime.now()
         proveedor_dict["estado"] = "activo"
         proveedor_dict["usuario_creacion"] = usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
+        
+        print(f"[CREAR-PROVEEDOR] Datos del proveedor a guardar: {proveedor_dict}")
         
         # Insertar proveedor
         result = await proveedores_collection.insert_one(proveedor_dict)
@@ -131,6 +147,11 @@ async def crear_proveedor(
         proveedor_creado = await proveedores_collection.find_one({"_id": ObjectId(proveedor_id)})
         proveedor_creado["_id"] = str(proveedor_creado["_id"])
         
+        # Normalizar campos numéricos en la respuesta
+        proveedor_creado["dias_credito"] = proveedor_creado.get("dias_credito") if proveedor_creado.get("dias_credito") is not None else 0
+        proveedor_creado["descuento_comercial"] = proveedor_creado.get("descuento_comercial") if proveedor_creado.get("descuento_comercial") is not None else 0.0
+        proveedor_creado["descuento_pronto_pago"] = proveedor_creado.get("descuento_pronto_pago") if proveedor_creado.get("descuento_pronto_pago") is not None else 0.0
+        
         if proveedor_creado.get("fecha_creacion"):
             if isinstance(proveedor_creado["fecha_creacion"], datetime):
                 proveedor_creado["fecha_creacion"] = proveedor_creado["fecha_creacion"].strftime("%Y-%m-%d %H:%M:%S")
@@ -138,6 +159,7 @@ async def crear_proveedor(
             if isinstance(proveedor_creado["fecha_actualizacion"], datetime):
                 proveedor_creado["fecha_actualizacion"] = proveedor_creado["fecha_actualizacion"].strftime("%Y-%m-%d %H:%M:%S")
         
+        print(f"[CREAR-PROVEEDOR] Proveedor creado exitosamente: {proveedor_creado}")
         return ProveedorResponse(**proveedor_creado)
         
     except HTTPException:
@@ -226,8 +248,15 @@ async def actualizar_proveedor(
             "usuario_actualizacion": usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
         }
         
-        # Remover campos None para no sobrescribir con None
-        update_data = {k: v for k, v in update_data.items() if v is not None}
+        # Normalizar campos numéricos: si vienen como None o undefined, asignar 0
+        update_data["dias_credito"] = proveedor_data.dias_credito if proveedor_data.dias_credito is not None else 0
+        update_data["descuento_comercial"] = proveedor_data.descuento_comercial if proveedor_data.descuento_comercial is not None else 0.0
+        update_data["descuento_pronto_pago"] = proveedor_data.descuento_pronto_pago if proveedor_data.descuento_pronto_pago is not None else 0.0
+        
+        # Remover campos None para no sobrescribir con None (excepto los numéricos que ya normalizamos)
+        update_data = {k: v for k, v in update_data.items() if v is not None or k in ["dias_credito", "descuento_comercial", "descuento_pronto_pago"]}
+        
+        print(f"[ACTUALIZAR-PROVEEDOR] Datos del proveedor a actualizar: {update_data}")
         
         # Actualizar proveedor
         result = await proveedores_collection.update_one(
@@ -245,6 +274,11 @@ async def actualizar_proveedor(
         proveedor_actualizado = await proveedores_collection.find_one({"_id": oid})
         proveedor_actualizado["_id"] = str(proveedor_actualizado["_id"])
         
+        # Normalizar campos numéricos en la respuesta
+        proveedor_actualizado["dias_credito"] = proveedor_actualizado.get("dias_credito") if proveedor_actualizado.get("dias_credito") is not None else 0
+        proveedor_actualizado["descuento_comercial"] = proveedor_actualizado.get("descuento_comercial") if proveedor_actualizado.get("descuento_comercial") is not None else 0.0
+        proveedor_actualizado["descuento_pronto_pago"] = proveedor_actualizado.get("descuento_pronto_pago") if proveedor_actualizado.get("descuento_pronto_pago") is not None else 0.0
+        
         if proveedor_actualizado.get("fecha_creacion"):
             if isinstance(proveedor_actualizado["fecha_creacion"], datetime):
                 proveedor_actualizado["fecha_creacion"] = proveedor_actualizado["fecha_creacion"].strftime("%Y-%m-%d %H:%M:%S")
@@ -252,6 +286,7 @@ async def actualizar_proveedor(
             if isinstance(proveedor_actualizado["fecha_actualizacion"], datetime):
                 proveedor_actualizado["fecha_actualizacion"] = proveedor_actualizado["fecha_actualizacion"].strftime("%Y-%m-%d %H:%M:%S")
         
+        print(f"[ACTUALIZAR-PROVEEDOR] Proveedor actualizado exitosamente: {proveedor_actualizado}")
         return ProveedorResponse(**proveedor_actualizado)
         
     except HTTPException:

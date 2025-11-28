@@ -12,6 +12,9 @@ class ProveedorCreate(BaseModel):
     direccion: Optional[str] = Field(None, description="Dirección del proveedor")
     contacto: Optional[str] = Field(None, description="Nombre de contacto")
     notas: Optional[str] = Field(None, description="Notas adicionales sobre el proveedor")
+    dias_credito: Optional[int] = Field(0, description="Días de crédito del proveedor", ge=0)
+    descuento_comercial: Optional[float] = Field(0, description="Descuento comercial (%)", ge=0, le=100)
+    descuento_pronto_pago: Optional[float] = Field(0, description="Descuento por pronto pago (%)", ge=0, le=100)
 
 
 class ProveedorResponse(BaseModel):
@@ -24,6 +27,9 @@ class ProveedorResponse(BaseModel):
     direccion: Optional[str] = None
     contacto: Optional[str] = None
     notas: Optional[str] = None
+    dias_credito: Optional[int] = 0
+    descuento_comercial: Optional[float] = 0
+    descuento_pronto_pago: Optional[float] = 0
     fecha_creacion: Optional[str] = None
     fecha_actualizacion: Optional[str] = None
     estado: Optional[str] = "activo"
