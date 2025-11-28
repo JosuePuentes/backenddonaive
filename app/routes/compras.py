@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query, Depends
+from pydantic import ValidationError
 from app.db.mongo import get_collection
 from app.core.get_current_user import get_current_user
 from app.schemas.compras import (
@@ -393,6 +394,14 @@ async def crear_compra(
     verificar_permiso(usuario, "compras")
     
     try:
+        # Log para debugging
+        print(f"[CREAR-COMPRA] Datos recibidos: proveedor_id={compra.proveedor_id}, items={len(compra.items) if compra.items else 0}")
+        if compra.items:
+            print(f"[CREAR-COMPRA] Primer item: {compra.items[0].dict() if hasattr(compra.items[0], 'dict') else compra.items[0]}")
+    except Exception as e:
+        print(f"[CREAR-COMPRA] Error al loggear datos: {str(e)}")
+    
+    try:
         # Validar que el proveedor existe
         proveedores_collection = get_collection("PROVEEDORES")
         try:
@@ -755,6 +764,21 @@ async def crear_compra(
         
         return CompraResponse(**compra_creada)
         
+    except ValidationError as e:
+        # Error de validación de Pydantic - proporcionar mensaje más claro
+        print(f"[CREAR-COMPRA] ERROR de validación Pydantic: {e}")
+        errors = []
+        for error in e.errors():
+            field = " -> ".join(str(x) for x in error.get("loc", []))
+            msg = error.get("msg", "Error de validación")
+            error_type = error.get("type", "unknown")
+            errors.append(f"{field}: {msg} (tipo: {error_type})")
+        error_msg = f"Error de validación: {'; '.join(errors)}"
+        print(f"[CREAR-COMPRA] {error_msg}")
+        raise HTTPException(
+            status_code=422,
+            detail=error_msg
+        )
     except HTTPException:
         raise
     except InvalidId as e:

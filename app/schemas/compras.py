@@ -49,6 +49,16 @@ class ItemCompra(BaseModel):
     fecha_vencimiento: Optional[str] = Field(None, description="Fecha de vencimiento (YYYY-MM-DD)")
     descripcion: Optional[str] = Field(None, description="Descripción adicional del item")
     lleva_iva: Optional[bool] = Field(False, description="Si el item lleva IVA")
+    
+    class Config:
+        # Permitir que campos opcionales sean None o no estén presentes
+        allow_population_by_field_name = True
+        # Convertir strings vacíos a None para campos opcionales
+        @classmethod
+        def json_schema_extra(cls, schema, model):
+            for field_name, field_info in model.__fields__.items():
+                if field_info.allow_none and field_info.default is None:
+                    schema['properties'][field_name]['x-nullable'] = True
 
 
 class CompraCreate(BaseModel):

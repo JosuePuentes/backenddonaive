@@ -1,7 +1,30 @@
-from fastapi import FastAPI, Depends, HTTPException, Body
+from fastapi import FastAPI, Depends, HTTPException, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 app = FastAPI(title="Rapifarma Backend", version="1.0.0")
+
+# Exception handler para errores de validación
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Maneja errores de validación y devuelve mensajes más claros"""
+    errors = []
+    for error in exc.errors():
+        field = " -> ".join(str(x) for x in error.get("loc", []))
+        msg = error.get("msg", "Error de validación")
+        error_type = error.get("type", "unknown")
+        errors.append(f"{field}: {msg} (tipo: {error_type})")
+    
+    error_msg = f"Error de validación: {'; '.join(errors)}"
+    print(f"[VALIDATION-ERROR] {error_msg}")
+    print(f"[VALIDATION-ERROR] Path: {request.url.path}")
+    print(f"[VALIDATION-ERROR] Body recibido: {await request.body()}")
+    
+    return JSONResponse(
+        status_code=422,
+        content={"detail": error_msg, "errors": exc.errors()}
+    )
 
 # Configurar CORS primero para que siempre esté disponible
 app.add_middleware(
