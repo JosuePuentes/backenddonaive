@@ -38,6 +38,16 @@ s3_client = boto3.client(
 
 router = APIRouter()
 
+def verificar_permiso(usuario: dict, permiso: str):
+    """Verifica si el usuario tiene un permiso específico"""
+    permisos = usuario.get("permisos", [])
+    if permiso not in permisos:
+        raise HTTPException(
+            status_code=403,
+            detail=f"No tienes permisos para realizar esta acción. Se requiere: {permiso}"
+        )
+
+
 class Gasto(BaseModel):
     monto: float
     titulo: str
@@ -76,6 +86,7 @@ class Inventario(BaseModel):
     usuarioCorreo: str
     fecha: Optional[str] = None  # Ahora es opcional
     estado: str = "activo"  # Nuevo campo con valor por defecto
+    porcentaje_descuento: Optional[float] = None  # Porcentaje de descuento (0-100)
 
 
 class Lote(BaseModel):
@@ -97,6 +108,11 @@ class ItemInventarioUpdate(BaseModel):
     descripcion: Optional[str] = None
     utilidad_contable: Optional[float] = None  # Se calculará automáticamente si no se proporciona
     lotes: Optional[List[Lote]] = None  # Array de lotes
+
+
+class InventarioDescuentoUpdate(BaseModel):
+    """Modelo para actualizar el porcentaje de descuento de un inventario"""
+    porcentaje_descuento: float
 
 
 class ItemInventarioResponse(BaseModel):
@@ -1605,6 +1621,66 @@ async def actualizar_estado_inventario(id: str, data: dict = Body(...), usuario:
         raise HTTPException(status_code=400, detail="ID inválido")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/inventarios/{inventario_id}")
+async def actualizar_porcentaje_descuento_inventario(
+    inventario_id: str,
+    data: InventarioDescuentoUpdate,
+    usuario: dict = Depends(get_current_user)
+):
+    """
+    Actualiza el porcentaje de descuento de un inventario.
+    
+    Requiere permisos: acceso_admin o modificar_inventario
+    El porcentaje debe estar entre 0 y 100.
+    """
+    try:
+        # Validar permisos: acceso_admin o modificar_inventario
+        permisos = usuario.get("permisos", [])
+        tiene_permiso = "acceso_admin" in permisos or "modificar_inventario" in permisos or "admin_completo" in permisos or "editar_inventario" in permisos
+        
+        if not tiene_permiso:
+            raise HTTPException(
+                status_code=403,
+                detail="No tienes permisos para modificar inventarios. Se requiere: acceso_admin o modificar_inventario"
+            )
+        
+        # Validar que el porcentaje esté entre 0 y 100
+        porcentaje = data.porcentaje_descuento
+        if porcentaje < 0 or porcentaje > 100:
+            raise HTTPException(
+                status_code=400,
+                detail="El porcentaje de descuento debe estar entre 0 y 100"
+            )
+        
+        collection = get_collection("INVENTARIOS")
+        
+        # Verificar que el inventario existe
+        inventario = await collection.find_one({"_id": ObjectId(inventario_id)})
+        if not inventario:
+            raise HTTPException(status_code=404, detail="Inventario no encontrado")
+        
+        # Actualizar el porcentaje de descuento
+        result = await collection.update_one(
+            {"_id": ObjectId(inventario_id)},
+            {"$set": {"porcentaje_descuento": porcentaje}}
+        )
+        
+        if result.modified_count == 0:
+            raise HTTPException(status_code=404, detail="Inventario no encontrado o sin cambios")
+        
+        return {
+            "message": "Porcentaje de descuento actualizado exitosamente",
+            "inventario_id": inventario_id,
+            "porcentaje_descuento": porcentaje
+        }
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="ID de inventario inválido")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al actualizar el porcentaje de descuento: {str(e)}")
 
 
 @router.delete("/inventarios/{id}")
