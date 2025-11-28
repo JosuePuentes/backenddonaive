@@ -435,6 +435,12 @@ async def crear_compra(
                 detail="La tasa de cambio es requerida cuando la divisa es BS"
             )
         
+        # Normalizar fecha_compra: usar la fecha actual si no se proporciona
+        fecha_compra_final = compra.fecha_compra
+        if not fecha_compra_final:
+            fecha_compra_final = datetime.now().strftime("%Y-%m-%d")
+            print(f"[CREAR-COMPRA] Fecha de compra no proporcionada, usando fecha actual: {fecha_compra_final}")
+        
         # Normalizar sucursal_id y sucursal (usar sucursal_id si viene, sino sucursal)
         sucursal_final = compra.sucursal_id or compra.sucursal
         
@@ -453,7 +459,7 @@ async def crear_compra(
         # Calcular fecha_vencimiento_factura si no viene y hay días de crédito
         fecha_vencimiento = compra.fecha_vencimiento_factura
         if not fecha_vencimiento and dias_credito_proveedor > 0:
-            fecha_compra_obj = datetime.strptime(compra.fecha_compra, "%Y-%m-%d")
+            fecha_compra_obj = datetime.strptime(fecha_compra_final, "%Y-%m-%d")
             fecha_vencimiento = (fecha_compra_obj + timedelta(days=dias_credito_proveedor)).strftime("%Y-%m-%d")
             print(f"[CREAR-COMPRA] Fecha vencimiento calculada: {fecha_vencimiento} (días crédito: {dias_credito_proveedor})")
         
@@ -466,6 +472,7 @@ async def crear_compra(
         compra_dict["lleva_iva"] = compra.lleva_iva or False
         compra_dict["iva"] = iva_calculado
         compra_dict["total_con_iva"] = total_con_iva
+        compra_dict["fecha_compra"] = fecha_compra_final
         compra_dict["fecha_vencimiento_factura"] = fecha_vencimiento
         compra_dict["dias_credito"] = dias_credito_proveedor
         compra_dict["usuario_creacion"] = usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))

@@ -69,7 +69,7 @@ class CompraCreate(BaseModel):
     sucursal_id: Optional[str] = Field(None, description="ID de la sucursal (alias de sucursal)")
     numero_factura: Optional[str] = Field(None, description="Número de factura")
     numero_control: Optional[str] = Field(None, description="Número de control")
-    fecha_compra: str = Field(..., description="Fecha de compra (YYYY-MM-DD)")
+    fecha_compra: Optional[str] = Field(None, description="Fecha de compra (YYYY-MM-DD). Si no se proporciona, se usa la fecha actual")
     fecha_vencimiento_factura: Optional[str] = Field(None, description="Fecha de vencimiento de la factura (YYYY-MM-DD)")
     items: List[ItemCompra] = Field(..., description="Lista de items comprados", min_items=1)
     total: float = Field(..., description="Total de la compra", gt=0)
