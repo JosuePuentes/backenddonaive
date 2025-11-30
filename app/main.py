@@ -87,19 +87,30 @@ async def debug_routes():
 
 # Importar dependencias y agregar endpoints complejos
 try:
+    print("🔄 Iniciando importación de módulos...")
     from app.api.v1.routes_example import router as example_router
+    print("✅ example_router importado")
     from app.routes import auth, metas
+    print("✅ auth y metas importados")
     from app.routes.pagoscpp import router as pagoscpp_router
+    print("✅ pagoscpp_router importado")
     from app.routes.cuadres import router as cuadres
+    print("✅ cuadres importado")
     from app.routes.punto_venta import router as punto_venta_router
+    print("✅ punto_venta_router importado")
     from app.routes.clientes import router as clientes_router
+    print("✅ clientes_router importado")
     from app.routes.compras import router as compras_router
+    print("✅ compras_router importado")
     from app.core.get_current_user import get_current_user
+    print("✅ get_current_user importado")
     from app.db.mongo import get_collection
+    print("✅ get_collection importado")
     from bson import ObjectId
     from bson.errors import InvalidId
     from typing import List
     from datetime import datetime
+    print("✅ Todas las importaciones básicas completadas")
     
     # ===== ENDPOINTS DE USUARIOS DIRECTOS =====
     
@@ -997,15 +1008,35 @@ try:
             )
 
     # Registrar routers
+    print("🔄 Registrando routers...")
     app.include_router(example_router, prefix="/api/v1")
+    print("✅ example_router registrado")
     app.include_router(auth.router, tags=["auth"]) # auth.router now only contains login and admin-specific endpoints
+    print("✅ auth.router registrado")
     app.include_router(pagoscpp_router)
+    print("✅ pagoscpp_router registrado")
     app.include_router(metas.router, tags=["metas"])
+    print("✅ metas.router registrado")
     app.include_router(cuadres, prefix="/api/cuadres", tags=["cuadres"])
+    print("✅ cuadres registrado")
     app.include_router(punto_venta_router, prefix="/punto-venta", tags=["punto-venta"])
+    print("✅ punto_venta_router registrado")
     app.include_router(clientes_router, tags=["clientes"])
+    print("✅ clientes_router registrado")
     app.include_router(compras_router, tags=["compras"])
+    print("✅ compras_router registrado")
+    print("✅ Todos los routers registrados exitosamente")
 
 except Exception as e:
-    print(f"Error importing complex dependencies: {e}")
+    import traceback
+    error_trace = traceback.format_exc()
+    print(f"❌ ERROR importing complex dependencies: {e}")
+    print(f"❌ Full traceback:\n{error_trace}")
     # CORS ya está configurado arriba, no es necesario configurarlo de nuevo
+    # Registrar al menos los routers básicos aunque haya errores
+    try:
+        from app.routes import auth
+        app.include_router(auth.router, tags=["auth"])
+        print("✅ auth.router registrado como fallback")
+    except Exception as auth_error:
+        print(f"❌ Error al registrar auth.router como fallback: {auth_error}")
