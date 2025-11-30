@@ -370,7 +370,7 @@ async def buscar_productos_compra(
 
 @router.post("/compras", response_model=CompraResponse, status_code=201)
 async def crear_compra(
-    compra: CompraCreate,
+    request: Request,
     usuario: dict = Depends(get_current_user)
 ):
     """
@@ -394,14 +394,83 @@ async def crear_compra(
     verificar_permiso(usuario, "compras")
     
     try:
-        # Log para debugging
-        print(f"[CREAR-COMPRA] Datos recibidos: proveedor_id={compra.proveedor_id}, items={len(compra.items) if compra.items else 0}")
-        if compra.items:
-            print(f"[CREAR-COMPRA] Primer item: {compra.items[0].dict() if hasattr(compra.items[0], 'dict') else compra.items[0]}")
-    except Exception as e:
-        print(f"[CREAR-COMPRA] Error al loggear datos: {str(e)}")
-    
-    try:
+        # Obtener datos del body como dict para mayor flexibilidad
+        try:
+            data = await request.json()
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error al parsear el body JSON: {str(e)}"
+            )
+        
+        print(f"[CREAR-COMPRA] Datos recibidos (raw): {data}")
+        
+        # Validar campos requeridos y aplicar valores por defecto
+        if "proveedor_id" not in data:
+            raise HTTPException(status_code=400, detail="El campo 'proveedor_id' es requerido")
+        
+        # Aplicar valores por defecto para campos opcionales
+        if "farmacia" not in data or not data["farmacia"]:
+            # Intentar obtener farmacia desde sucursal si existe
+            if "sucursal_id" in data and data["sucursal_id"]:
+                # Aquí podrías buscar la farmacia desde la sucursal
+                data["farmacia"] = "01"  # Valor por defecto temporal
+                print(f"[CREAR-COMPRA] Farmacia no proporcionada, usando valor por defecto: {data['farmacia']}")
+            else:
+                raise HTTPException(status_code=400, detail="El campo 'farmacia' es requerido")
+        
+        if "fecha_compra" not in data or not data["fecha_compra"]:
+            data["fecha_compra"] = datetime.now().strftime("%Y-%m-%d")
+            print(f"[CREAR-COMPRA] Fecha de compra no proporcionada, usando fecha actual: {data['fecha_compra']}")
+        
+        if "divisa" not in data or not data["divisa"]:
+            data["divisa"] = "USD"  # Valor por defecto
+            print(f"[CREAR-COMPRA] Divisa no proporcionada, usando USD por defecto")
+        
+        # Validar y normalizar items
+        if "items" not in data or not data["items"] or len(data["items"]) == 0:
+            raise HTTPException(status_code=400, detail="La compra debe tener al menos un item")
+        
+        # Normalizar items: asegurar que tengan los campos requeridos
+        for idx, item in enumerate(data["items"]):
+            if "codigo" not in item or not item["codigo"]:
+                raise HTTPException(status_code=400, detail=f"El item {idx} debe tener un 'codigo'")
+            if "nombre" not in item or not item["nombre"]:
+                # Intentar usar descripcion o codigo como nombre
+                item["nombre"] = item.get("descripcion") or item.get("codigo") or f"Producto {item['codigo']}"
+                print(f"[CREAR-COMPRA] Item {idx} sin nombre, usando: {item['nombre']}")
+            if "cantidad" not in item or item["cantidad"] is None:
+                raise HTTPException(status_code=400, detail=f"El item {idx} debe tener una 'cantidad'")
+            if "costo_unitario" not in item or item["costo_unitario"] is None:
+                # Intentar calcular desde precio_unitario o usar 0
+                if "precio_unitario" in item and item["precio_unitario"]:
+                    item["costo_unitario"] = item["precio_unitario"]
+                else:
+                    raise HTTPException(status_code=400, detail=f"El item {idx} debe tener un 'costo_unitario'")
+        
+        # Calcular total si no viene
+        if "total" not in data or not data["total"]:
+            total_calculado = 0.0
+            for item in data["items"]:
+                cantidad = float(item.get("cantidad", 0))
+                costo_unitario = float(item.get("costo_unitario", 0))
+                total_calculado += cantidad * costo_unitario
+            data["total"] = total_calculado
+            print(f"[CREAR-COMPRA] Total no proporcionado, calculado: {data['total']}")
+        
+        # Validar con Pydantic después de normalizar
+        try:
+            compra = CompraCreate(**data)
+        except ValidationError as e:
+            errors = []
+            for error in e.errors():
+                field = " -> ".join(str(x) for x in error.get("loc", []))
+                msg = error.get("msg", "Error de validación")
+                errors.append(f"{field}: {msg}")
+            error_msg = f"Error de validación después de normalización: {'; '.join(errors)}"
+            print(f"[CREAR-COMPRA] {error_msg}")
+            raise HTTPException(status_code=422, detail=error_msg)
+        
         # Validar que el proveedor existe
         proveedores_collection = get_collection("PROVEEDORES")
         try:
@@ -420,13 +489,6 @@ async def crear_compra(
             )
         
         proveedor_nombre = proveedor.get("nombre", "Proveedor desconocido")
-        
-        # Validar que la compra tenga items
-        if not compra.items or len(compra.items) == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="La compra debe tener al menos un item"
-            )
         
         # Validar tasa si la divisa es BS
         if compra.divisa == "BS" and (not compra.tasa or compra.tasa <= 0):
@@ -562,46 +624,95 @@ async def crear_compra(
                 # Producto existe: actualizar cantidad y costo
                 print(f"[CREAR-COMPRA] Producto existente encontrado: {item_compra.codigo}, actualizando...")
                 
-                # Calcular nuevo costo unitario promedio (promedio ponderado)
+                # SUMAR cantidad (no reemplazar)
                 cantidad_anterior = item_existente.get("cantidad", 0)
                 costo_anterior = item_existente.get("costo", 0)
                 costo_unitario_anterior = item_existente.get("costo_unitario", 0)
                 
                 cantidad_total = cantidad_anterior + item_compra.cantidad
                 costo_total_nuevo = costo_anterior + costo_item
-                costo_unitario_promedio = costo_total_nuevo / cantidad_total if cantidad_total > 0 else item_compra.costo_unitario
+                
+                # Calcular costo_ajustado (promedio ponderado del costo ajustado)
+                # El costo_unitario que viene ya es el costo ajustado (incluye ajuste de dólar negro)
+                costo_ajustado = costo_total_nuevo / cantidad_total if cantidad_total > 0 else item_compra.costo_unitario
                 
                 # Actualizar item existente
                 items_inventario[item_existente_idx]["cantidad"] = cantidad_total
                 items_inventario[item_existente_idx]["costo"] = costo_total_nuevo
-                items_inventario[item_existente_idx]["costo_unitario"] = costo_unitario_promedio
+                items_inventario[item_existente_idx]["costo_unitario"] = costo_ajustado  # Usar costo ajustado
                 
                 # Actualizar precio unitario si se proporciona uno nuevo
                 if item_compra.precio_unitario:
                     items_inventario[item_existente_idx]["precio_unitario"] = item_compra.precio_unitario
                 
-                precio_unitario_final = items_inventario[item_existente_idx].get("precio_unitario", costo_unitario_promedio)
+                precio_unitario_final = items_inventario[item_existente_idx].get("precio_unitario", costo_ajustado)
                 items_inventario[item_existente_idx]["precio"] = precio_unitario_final * cantidad_total
-                items_inventario[item_existente_idx]["utilidad_contable"] = (
-                    precio_unitario_final - costo_unitario_promedio
-                ) * cantidad_total if precio_unitario_final > 0 else 0
                 
-                # Manejar lotes: agregar a lotes existentes o crear nuevo array
+                # Calcular utilidad como porcentaje
+                if precio_unitario_final > 0 and costo_ajustado > 0:
+                    utilidad_porcentaje = ((precio_unitario_final - costo_ajustado) / costo_ajustado) * 100
+                    items_inventario[item_existente_idx]["utilidad"] = round(utilidad_porcentaje, 2)
+                    items_inventario[item_existente_idx]["utilidad_contable"] = (
+                        precio_unitario_final - costo_ajustado
+                    ) * cantidad_total
+                else:
+                    items_inventario[item_existente_idx]["utilidad"] = 0
+                    items_inventario[item_existente_idx]["utilidad_contable"] = 0
+                
+                # Actualizar marca si viene en la compra
+                if item_compra.marca:
+                    items_inventario[item_existente_idx]["marca"] = item_compra.marca
+                
+                # Actualizar utilidad si viene como porcentaje
+                if item_compra.utilidad is not None:
+                    items_inventario[item_existente_idx]["utilidad"] = item_compra.utilidad
+                    # Recalcular precio basado en utilidad si no viene precio_unitario
+                    if not item_compra.precio_unitario:
+                        nuevo_precio = costo_ajustado * (1 + item_compra.utilidad / 100)
+                        items_inventario[item_existente_idx]["precio_unitario"] = nuevo_precio
+                        items_inventario[item_existente_idx]["precio"] = nuevo_precio * cantidad_total
+                        precio_unitario_final = nuevo_precio
+                
+                # Manejar lotes: sumar cantidad si existe, crear si no existe
                 if item_compra.lote or item_compra.fecha_vencimiento:
                     lotes_existentes = items_inventario[item_existente_idx].get("lotes", [])
                     if not isinstance(lotes_existentes, list):
                         lotes_existentes = []
                     
-                    nuevo_lote = {
-                        "numero_lote": item_compra.lote or f"LOTE-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-                        "fecha_vencimiento": item_compra.fecha_vencimiento,
-                        "cantidad": item_compra.cantidad,
-                        "costo_unitario": item_compra.costo_unitario,
-                        "precio_unitario": item_compra.precio_unitario or item_compra.costo_unitario
-                    }
-                    lotes_existentes.append(nuevo_lote)
+                    numero_lote = item_compra.lote or f"LOTE-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                    
+                    # Buscar si el lote ya existe
+                    lote_existente_idx = None
+                    for idx, lote in enumerate(lotes_existentes):
+                        if lote.get("numero_lote") == numero_lote:
+                            lote_existente_idx = idx
+                            break
+                    
+                    if lote_existente_idx is not None:
+                        # Lote existe: sumar cantidad
+                        cantidad_lote_anterior = lotes_existentes[lote_existente_idx].get("cantidad", 0)
+                        lotes_existentes[lote_existente_idx]["cantidad"] = cantidad_lote_anterior + item_compra.cantidad
+                        # Actualizar costo y precio si cambian
+                        if item_compra.costo_unitario:
+                            lotes_existentes[lote_existente_idx]["costo_unitario"] = item_compra.costo_unitario
+                        if item_compra.precio_unitario:
+                            lotes_existentes[lote_existente_idx]["precio_unitario"] = item_compra.precio_unitario
+                        if item_compra.fecha_vencimiento:
+                            lotes_existentes[lote_existente_idx]["fecha_vencimiento"] = item_compra.fecha_vencimiento
+                        print(f"[CREAR-COMPRA] Cantidad sumada a lote existente: {numero_lote}")
+                    else:
+                        # Lote no existe: crear nuevo
+                        nuevo_lote = {
+                            "numero_lote": numero_lote,
+                            "fecha_vencimiento": item_compra.fecha_vencimiento,
+                            "cantidad": item_compra.cantidad,
+                            "costo_unitario": item_compra.costo_unitario,
+                            "precio_unitario": item_compra.precio_unitario or item_compra.costo_unitario
+                        }
+                        lotes_existentes.append(nuevo_lote)
+                        print(f"[CREAR-COMPRA] Nuevo lote creado: {numero_lote}")
+                    
                     items_inventario[item_existente_idx]["lotes"] = lotes_existentes
-                    print(f"[CREAR-COMPRA] Lote agregado a producto existente: {nuevo_lote['numero_lote']}")
                 
                 # Actualizar referencia a compra
                 compras_ids = items_inventario[item_existente_idx].get("compras_ids", [])
@@ -615,23 +726,44 @@ async def crear_compra(
                 # Producto no existe: crear nuevo item
                 print(f"[CREAR-COMPRA] Producto nuevo: {item_compra.codigo}, creando...")
                 
+                # Calcular precio y utilidad
+                precio_unitario_final = item_compra.precio_unitario
+                utilidad_porcentaje = item_compra.utilidad
+                
+                # Si viene utilidad pero no precio, calcular precio desde utilidad
+                if utilidad_porcentaje is not None and not precio_unitario_final:
+                    precio_unitario_final = item_compra.costo_unitario * (1 + utilidad_porcentaje / 100)
+                
+                # Si no viene ni precio ni utilidad, usar costo como precio
+                if not precio_unitario_final:
+                    precio_unitario_final = item_compra.costo_unitario
+                
+                # Calcular utilidad como porcentaje si no viene
+                if utilidad_porcentaje is None and precio_unitario_final > 0 and item_compra.costo_unitario > 0:
+                    utilidad_porcentaje = ((precio_unitario_final - item_compra.costo_unitario) / item_compra.costo_unitario) * 100
+                
                 item_inventario = {
                     "item_id": str(ObjectId()),  # Generar ID único
                     "codigo": item_compra.codigo,
                     "nombre": item_compra.nombre,
                     "descripcion": item_compra.descripcion or item_compra.nombre,
                     "cantidad": item_compra.cantidad,
-                    "costo_unitario": item_compra.costo_unitario,
-                    "precio_unitario": item_compra.precio_unitario or item_compra.costo_unitario,
+                    "costo_unitario": item_compra.costo_unitario,  # Ya es costo ajustado
+                    "precio_unitario": precio_unitario_final,
                     "costo": costo_item,
-                    "precio": (item_compra.precio_unitario or item_compra.costo_unitario) * item_compra.cantidad,
+                    "precio": precio_unitario_final * item_compra.cantidad,
+                    "utilidad": round(utilidad_porcentaje, 2) if utilidad_porcentaje is not None else 0,
                     "utilidad_contable": (
-                        (item_compra.precio_unitario or item_compra.costo_unitario) - item_compra.costo_unitario
-                    ) * item_compra.cantidad if item_compra.precio_unitario else 0,
+                        precio_unitario_final - item_compra.costo_unitario
+                    ) * item_compra.cantidad if precio_unitario_final > 0 else 0,
                     "inventario_id": inventario_id,
                     "compra_id": compra_id,  # Referencia a la compra
                     "compras_ids": [compra_id]
                 }
+                
+                # Agregar marca si viene
+                if item_compra.marca:
+                    item_inventario["marca"] = item_compra.marca
                 
                 # Agregar lotes si se proporcionan
                 if item_compra.lote or item_compra.fecha_vencimiento:
@@ -641,7 +773,7 @@ async def crear_compra(
                         "fecha_vencimiento": item_compra.fecha_vencimiento,
                         "cantidad": item_compra.cantidad,
                         "costo_unitario": item_compra.costo_unitario,
-                        "precio_unitario": item_compra.precio_unitario or item_compra.costo_unitario
+                        "precio_unitario": precio_unitario_final
                     }
                     lotes.append(lote)
                     item_inventario["lotes"] = lotes
@@ -658,65 +790,115 @@ async def crear_compra(
                 
                 if producto_existente:
                     # Actualizar producto existente
-                    precio_unitario_final = item_compra.precio_unitario or item_compra.costo_unitario
+                    # Calcular precio y utilidad
+                    precio_unitario_final = item_compra.precio_unitario
+                    utilidad_porcentaje = item_compra.utilidad
+                    
+                    # Si viene utilidad pero no precio, calcular precio desde utilidad
+                    if utilidad_porcentaje is not None and not precio_unitario_final:
+                        precio_unitario_final = item_compra.costo_unitario * (1 + utilidad_porcentaje / 100)
+                    
+                    # Si no viene ni precio ni utilidad, usar costo como precio
+                    if not precio_unitario_final:
+                        precio_unitario_final = item_compra.precio_unitario or item_compra.costo_unitario
+                    
+                    # SUMAR stock (no reemplazar)
                     stock_actual = producto_existente.get("stock", 0) or 0
                     stock_nuevo = stock_actual + item_compra.cantidad
                     
-                    # Actualizar stock por sucursal si hay sucursal
+                    # Actualizar stock por sucursal si hay sucursal (usar sucursal_id de la compra)
                     stock_sucursal = producto_existente.get("stock_sucursal", {})
                     if not isinstance(stock_sucursal, dict):
                         stock_sucursal = {}
                     
-                    if compra.sucursal:
-                        stock_anterior_sucursal = stock_sucursal.get(compra.sucursal, 0) or 0
-                        stock_sucursal[compra.sucursal] = stock_anterior_sucursal + item_compra.cantidad
+                    sucursal_para_stock = sucursal_final or compra.sucursal
+                    if sucursal_para_stock:
+                        stock_anterior_sucursal = stock_sucursal.get(sucursal_para_stock, 0) or 0
+                        stock_sucursal[sucursal_para_stock] = stock_anterior_sucursal + item_compra.cantidad
                     
                     # Actualizar sucursales
                     sucursales = producto_existente.get("sucursales", [])
                     if not isinstance(sucursales, list):
                         sucursales = []
-                    if compra.sucursal and compra.sucursal not in sucursales:
-                        sucursales.append(compra.sucursal)
+                    if sucursal_para_stock and sucursal_para_stock not in sucursales:
+                        sucursales.append(sucursal_para_stock)
+                    
+                    # Preparar actualización
+                    update_data = {
+                        "nombre": item_compra.nombre,
+                        "precio": precio_unitario_final,
+                        "costo": item_compra.costo_unitario,  # Usar costo ajustado
+                        "stock": stock_nuevo,
+                        "stock_sucursal": stock_sucursal,
+                        "sucursal": sucursal_para_stock or producto_existente.get("sucursal"),
+                        "sucursales": sucursales,
+                        "fecha_actualizacion": datetime.now().isoformat(),
+                        "usuario_actualizacion": usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
+                    }
+                    
+                    # Actualizar marca si viene
+                    if item_compra.marca:
+                        update_data["marca"] = item_compra.marca
+                    
+                    # Actualizar utilidad si viene
+                    if utilidad_porcentaje is not None:
+                        update_data["utilidad"] = round(utilidad_porcentaje, 2)
+                    elif precio_unitario_final > 0 and item_compra.costo_unitario > 0:
+                        # Calcular utilidad si no viene
+                        utilidad_calculada = ((precio_unitario_final - item_compra.costo_unitario) / item_compra.costo_unitario) * 100
+                        update_data["utilidad"] = round(utilidad_calculada, 2)
                     
                     await productos_collection.update_one(
                         {"_id": producto_existente["_id"]},
-                        {
-                            "$set": {
-                                "nombre": item_compra.nombre,
-                                "precio": precio_unitario_final,
-                                "costo": item_compra.costo_unitario,
-                                "stock": stock_nuevo,
-                                "stock_sucursal": stock_sucursal,
-                                "sucursal": compra.sucursal or producto_existente.get("sucursal"),
-                                "sucursales": sucursales,
-                                "fecha_actualizacion": datetime.now().isoformat(),
-                                "usuario_actualizacion": usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
-                            }
-                        }
+                        {"$set": update_data}
                     )
                     productos_actualizados.append(item_compra.codigo)
                     print(f"[CREAR-COMPRA] Producto actualizado en PRODUCTOS: {item_compra.codigo}")
                 else:
                     # Crear nuevo producto
-                    precio_unitario_final = item_compra.precio_unitario or item_compra.costo_unitario
+                    # Calcular precio y utilidad
+                    precio_unitario_final = item_compra.precio_unitario
+                    utilidad_porcentaje = item_compra.utilidad
+                    
+                    # Si viene utilidad pero no precio, calcular precio desde utilidad
+                    if utilidad_porcentaje is not None and not precio_unitario_final:
+                        precio_unitario_final = item_compra.costo_unitario * (1 + utilidad_porcentaje / 100)
+                    
+                    # Si no viene ni precio ni utilidad, usar costo como precio
+                    if not precio_unitario_final:
+                        precio_unitario_final = item_compra.costo_unitario
+                    
+                    # Calcular utilidad como porcentaje si no viene
+                    if utilidad_porcentaje is None and precio_unitario_final > 0 and item_compra.costo_unitario > 0:
+                        utilidad_porcentaje = ((precio_unitario_final - item_compra.costo_unitario) / item_compra.costo_unitario) * 100
+                    
                     stock_sucursal = {}
-                    if compra.sucursal:
-                        stock_sucursal[compra.sucursal] = item_compra.cantidad
+                    sucursal_para_stock = sucursal_final or compra.sucursal
+                    if sucursal_para_stock:
+                        stock_sucursal[sucursal_para_stock] = item_compra.cantidad
                     
                     nuevo_producto = {
                         "codigo": item_compra.codigo,
                         "nombre": item_compra.nombre,
                         "descripcion": item_compra.descripcion or item_compra.nombre,
                         "precio": precio_unitario_final,
-                        "costo": item_compra.costo_unitario,
+                        "costo": item_compra.costo_unitario,  # Ya es costo ajustado
                         "stock": item_compra.cantidad,
                         "stock_sucursal": stock_sucursal,
-                        "sucursal": compra.sucursal,
-                        "sucursales": [compra.sucursal] if compra.sucursal else [],
+                        "sucursal": sucursal_para_stock,
+                        "sucursales": [sucursal_para_stock] if sucursal_para_stock else [],
                         "estado": "activo",
                         "fecha_creacion": datetime.now().isoformat(),
                         "usuario_creacion": usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
                     }
+                    
+                    # Agregar marca si viene
+                    if item_compra.marca:
+                        nuevo_producto["marca"] = item_compra.marca
+                    
+                    # Agregar utilidad como porcentaje
+                    if utilidad_porcentaje is not None:
+                        nuevo_producto["utilidad"] = round(utilidad_porcentaje, 2)
                     
                     await productos_collection.insert_one(nuevo_producto)
                     productos_actualizados.append(item_compra.codigo)

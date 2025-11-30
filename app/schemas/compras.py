@@ -43,11 +43,13 @@ class ItemCompra(BaseModel):
     codigo: str = Field(..., description="Código del producto")
     nombre: str = Field(..., description="Nombre del producto")
     cantidad: int = Field(..., description="Cantidad comprada", gt=0)
-    costo_unitario: float = Field(..., description="Costo unitario del producto", gt=0)
+    costo_unitario: float = Field(..., description="Costo unitario ajustado del producto (ya incluye ajuste de dólar negro)", gt=0)
     precio_unitario: Optional[float] = Field(None, description="Precio unitario de venta")
     lote: Optional[str] = Field(None, description="Número de lote")
     fecha_vencimiento: Optional[str] = Field(None, description="Fecha de vencimiento (YYYY-MM-DD)")
     descripcion: Optional[str] = Field(None, description="Descripción adicional del item")
+    marca: Optional[str] = Field(None, description="Marca del producto")
+    utilidad: Optional[float] = Field(None, description="Porcentaje de utilidad (ej: 30 para 30%)", ge=0, le=100)
     lleva_iva: Optional[bool] = Field(False, description="Si el item lleva IVA")
     
     class Config:
