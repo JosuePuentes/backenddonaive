@@ -50,8 +50,14 @@ async def listar_proveedores(
             # Por defecto, solo mostrar activos
             query["estado"] = {"$ne": "inactivo"}
         
+        # Contar total de proveedores antes de filtrar
+        total_proveedores = await proveedores_collection.count_documents({})
+        total_proveedores_filtrados = await proveedores_collection.count_documents(query)
+        print(f"[LISTAR-PROVEEDORES] Total en BD: {total_proveedores}, Filtrados por query: {total_proveedores_filtrados}, Query: {query}")
+        
         # Obtener proveedores con paginación
         proveedores = await proveedores_collection.find(query).skip(skip).limit(limit).sort("fecha_creacion", -1).to_list(length=limit)
+        print(f"[LISTAR-PROVEEDORES] Proveedores encontrados después de paginación: {len(proveedores)}")
         
         # Formatear resultados
         resultado = []
@@ -1071,8 +1077,14 @@ async def listar_compras(
         if estado_pago:
             query["estado_pago"] = estado_pago
         
+        # Contar total de compras antes de filtrar
+        total_compras = await compras_collection.count_documents({})
+        total_compras_filtradas = await compras_collection.count_documents(query)
+        print(f"[LISTAR-COMPRAS] Total en BD: {total_compras}, Filtradas por query: {total_compras_filtradas}, Query: {query}")
+        
         # Obtener compras con paginación
         compras = await compras_collection.find(query).skip(skip).limit(limit).sort("fecha_creacion", -1).to_list(length=limit)
+        print(f"[LISTAR-COMPRAS] Compras encontradas después de paginación: {len(compras)}")
         
         # Formatear resultados y calcular estados
         resultado = []
