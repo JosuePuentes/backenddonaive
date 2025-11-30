@@ -70,6 +70,21 @@ async def test_simple():
 async def health_check():
     return {"status": "healthy", "version": "1.0.0", "endpoints": ["test-direct", "test-simple", "usuarios", "farmacias/resumen"]}
 
+@app.get("/debug/routes")
+async def debug_routes():
+    """Endpoint de diagnóstico para verificar qué rutas están registradas"""
+    routes = []
+    for route in app.routes:
+        if hasattr(route, "path") and hasattr(route, "methods"):
+            routes.append({
+                "path": route.path,
+                "methods": list(route.methods) if route.methods else []
+            })
+    return {
+        "total_routes": len(routes),
+        "routes": sorted(routes, key=lambda x: x["path"])
+    }
+
 # Importar dependencias y agregar endpoints complejos
 try:
     from app.api.v1.routes_example import router as example_router
