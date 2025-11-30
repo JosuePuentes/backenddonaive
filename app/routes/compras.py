@@ -938,14 +938,17 @@ async def crear_compra(
         compra_creada["dias_credito"] = dias_credito
         compra_creada["dias_mora"] = dias_mora
         
-        # Asegurar que todos los campos estén presentes
+        # Asegurar que todos los campos numéricos estén presentes y normalizados
         compra_creada["lleva_iva"] = compra_creada.get("lleva_iva", False)
-        compra_creada["iva"] = compra_creada.get("iva", 0) or 0
-        compra_creada["total_con_iva"] = compra_creada.get("total_con_iva") or compra_creada.get("total", 0)
+        compra_creada["iva"] = float(compra_creada.get("iva", 0) or 0)
+        compra_creada["total"] = float(compra_creada.get("total", 0) or 0)
+        compra_creada["total_con_iva"] = float(compra_creada.get("total_con_iva") or compra_creada.get("total", 0) or 0)
         compra_creada["sucursal_id"] = compra_creada.get("sucursal_id") or compra_creada.get("sucursal")
         compra_creada["estado_pago"] = compra_creada.get("estado_pago", "sin_pago")
-        compra_creada["monto_pagado"] = compra_creada.get("monto_pagado", 0) or 0
-        compra_creada["monto_pendiente"] = compra_creada.get("monto_pendiente") or compra_creada["total_con_iva"]
+        compra_creada["monto_pagado"] = float(compra_creada.get("monto_pagado", 0) or 0)
+        compra_creada["monto_pendiente"] = float(compra_creada.get("monto_pendiente") or compra_creada["total_con_iva"] or 0)
+        compra_creada["dias_credito"] = int(compra_creada.get("dias_credito", 0) or 0)
+        compra_creada["dias_mora"] = int(compra_creada.get("dias_mora", 0) or 0)
         
         if compra_creada.get("fecha_creacion"):
             if isinstance(compra_creada["fecha_creacion"], datetime):
@@ -1074,10 +1077,16 @@ async def listar_compras(
             compra["dias_credito"] = dias_credito
             compra["dias_mora"] = dias_mora
             
-            # Normalizar campos
+            # Normalizar campos numéricos - asegurar que siempre tengan valores por defecto
             compra["lleva_iva"] = compra.get("lleva_iva", False)
-            compra["iva"] = compra.get("iva", 0) or 0
-            compra["total_con_iva"] = compra.get("total_con_iva") or compra.get("total", 0)
+            compra["iva"] = float(compra.get("iva", 0) or 0)
+            compra["total"] = float(compra.get("total", 0) or 0)
+            compra["total_con_iva"] = float(compra.get("total_con_iva") or compra.get("total", 0) or 0)
+            compra["monto_pagado"] = float(compra.get("monto_pagado", 0) or 0)
+            compra["monto_pendiente"] = float(compra.get("monto_pendiente", 0) or 0)
+            compra["dias_credito"] = int(compra.get("dias_credito", 0) or 0)
+            compra["dias_mora"] = int(compra.get("dias_mora", 0) or 0)
+            compra["tasa"] = float(compra.get("tasa", 0) or 0) if compra.get("tasa") else None
             compra["sucursal_id"] = compra.get("sucursal_id") or compra.get("sucursal")
             
             if compra.get("fecha_creacion"):

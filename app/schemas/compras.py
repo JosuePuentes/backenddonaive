@@ -95,21 +95,21 @@ class CompraResponse(BaseModel):
     fecha_compra: str
     fecha_vencimiento_factura: Optional[str] = None
     items: List[dict] = []
-    total: float
+    total: float = 0.0
     divisa: str
     tasa: Optional[float] = None
     lleva_iva: Optional[bool] = False
-    iva: Optional[float] = 0
-    total_con_iva: Optional[float] = None
+    iva: float = 0.0
+    total_con_iva: float = 0.0
     notas: Optional[str] = None
     usuario_creacion: Optional[str] = None
     fecha_creacion: Optional[str] = None
     estado: Optional[str] = "activa"
     estado_pago: Optional[str] = "sin_pago"  # sin_pago, abonado, pagada
-    monto_pagado: Optional[float] = 0
-    monto_pendiente: Optional[float] = None
-    dias_credito: Optional[int] = 0
-    dias_mora: Optional[int] = 0
+    monto_pagado: float = 0.0
+    monto_pendiente: float = 0.0
+    dias_credito: int = 0
+    dias_mora: int = 0
     
     class Config:
         extra = "allow"  # Permite campos adicionales que puedan existir en las compras
