@@ -145,6 +145,17 @@ async def crear_proveedor(
         # Insertar proveedor
         result = await proveedores_collection.insert_one(proveedor_dict)
         proveedor_id = str(result.inserted_id)
+        print(f"[CREAR-PROVEEDOR] ✅ Proveedor insertado en MongoDB con ID: {proveedor_id}")
+        print(f"[CREAR-PROVEEDOR] ✅ inserted_id confirmado: {result.inserted_id}")
+        
+        # Verificar que el proveedor se guardó correctamente
+        proveedor_verificado = await proveedores_collection.find_one({"_id": ObjectId(proveedor_id)})
+        if not proveedor_verificado:
+            raise HTTPException(
+                status_code=500,
+                detail="Error: El proveedor no se pudo verificar después de la inserción"
+            )
+        print(f"[CREAR-PROVEEDOR] ✅ Proveedor verificado en MongoDB: {proveedor_verificado.get('nombre')}")
         
         # Obtener el proveedor creado
         proveedor_creado = await proveedores_collection.find_one({"_id": ObjectId(proveedor_id)})
@@ -554,8 +565,17 @@ async def crear_compra(
         # Insertar compra
         result_compra = await compras_collection.insert_one(compra_dict)
         compra_id = str(result_compra.inserted_id)
+        print(f"[CREAR-COMPRA] ✅ Compra insertada en MongoDB con ID: {compra_id}")
+        print(f"[CREAR-COMPRA] ✅ inserted_id confirmado: {result_compra.inserted_id}")
         
-        print(f"[CREAR-COMPRA] Compra creada con ID: {compra_id}")
+        # Verificar que la compra se guardó correctamente
+        compra_verificada = await compras_collection.find_one({"_id": ObjectId(compra_id)})
+        if not compra_verificada:
+            raise HTTPException(
+                status_code=500,
+                detail="Error: La compra no se pudo verificar después de la inserción"
+            )
+        print(f"[CREAR-COMPRA] ✅ Compra verificada en MongoDB: Total={compra_verificada.get('total')}, Items={len(compra_verificada.get('items', []))}")
         
         # Buscar o crear inventario activo para la farmacia/sucursal
         inventarios_collection = get_collection("INVENTARIOS")
