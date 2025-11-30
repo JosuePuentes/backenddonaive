@@ -101,6 +101,47 @@ try:
             items.append(u)
         return {"usuarios": items}
     
+    @app.get("/usuarios/me")
+    async def obtener_usuario_actual(usuario: dict = Depends(get_current_user)):
+        """Obtener información del usuario actual autenticado"""
+        try:
+            usuarios_collection = get_collection("USUARIOS")
+            
+            # Obtener usuario actualizado desde la BD para tener permisos frescos
+            correo = usuario.get("correo")
+            if not correo:
+                raise HTTPException(
+                    status_code=401,
+                    detail="No se pudo identificar al usuario"
+                )
+            
+            usuario_actualizado = await usuarios_collection.find_one(
+                {"correo": correo},
+                {"contraseña": 0}  # Excluir contraseña
+            )
+            
+            if not usuario_actualizado:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Usuario no encontrado"
+                )
+            
+            # Formatear respuesta
+            usuario_actualizado["_id"] = str(usuario_actualizado["_id"])
+            
+            return usuario_actualizado
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[OBTENER-USUARIO-ACTUAL] Error: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al obtener usuario actual: {str(e)}"
+            )
+    
     @app.get("/modificar-usuarios")
     async def modificar_usuarios(usuario: dict = Depends(get_current_user)):
         """Endpoint para el módulo de modificar usuarios - Retorna todos los usuarios"""
@@ -113,6 +154,47 @@ try:
             u["_id"] = str(u["_id"])
             items.append(u)
         return {"usuarios": items}
+    
+    @app.get("/modificar-usuarios/me")
+    async def obtener_usuario_actual_modificar(usuario: dict = Depends(get_current_user)):
+        """Obtener información del usuario actual desde el módulo de modificar usuarios"""
+        try:
+            usuarios_collection = get_collection("USUARIOS")
+            
+            # Obtener usuario actualizado desde la BD para tener permisos frescos
+            correo = usuario.get("correo")
+            if not correo:
+                raise HTTPException(
+                    status_code=401,
+                    detail="No se pudo identificar al usuario"
+                )
+            
+            usuario_actualizado = await usuarios_collection.find_one(
+                {"correo": correo},
+                {"contraseña": 0}  # Excluir contraseña
+            )
+            
+            if not usuario_actualizado:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Usuario no encontrado"
+                )
+            
+            # Formatear respuesta
+            usuario_actualizado["_id"] = str(usuario_actualizado["_id"])
+            
+            return {"usuario": usuario_actualizado}
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"[OBTENER-USUARIO-ACTUAL-MODIFICAR] Error: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al obtener usuario actual: {str(e)}"
+            )
 
     @app.get("/modificar-usuarios/{id}")
     async def obtener_usuario_modificar(id: str, usuario: dict = Depends(get_current_user)):
