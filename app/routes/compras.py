@@ -1086,10 +1086,84 @@ async def listar_compras(
         compras = await compras_collection.find(query).skip(skip).limit(limit).sort("fecha_creacion", -1).to_list(length=limit)
         print(f"[LISTAR-COMPRAS] Compras encontradas después de paginación: {len(compras)}")
         
+        # Obtener colección de proveedores para poblar datos
+        proveedores_collection = get_collection("PROVEEDORES")
+        
         # Formatear resultados y calcular estados
         resultado = []
         for compra in compras:
             compra["_id"] = str(compra["_id"])
+            
+            # Poblar objeto proveedor completo
+            proveedor_id = compra.get("proveedor_id")
+            if proveedor_id:
+                try:
+                    proveedor_oid = ObjectId(proveedor_id)
+                    proveedor_completo = await proveedores_collection.find_one({"_id": proveedor_oid})
+                    
+                    if proveedor_completo:
+                        # Formatear objeto proveedor
+                        proveedor_dict = {
+                            "_id": str(proveedor_completo["_id"]),
+                            "nombre": proveedor_completo.get("nombre", ""),
+                            "rif": proveedor_completo.get("rif"),
+                            "telefono": proveedor_completo.get("telefono"),
+                            "email": proveedor_completo.get("email"),
+                            "direccion": proveedor_completo.get("direccion"),
+                            "contacto": proveedor_completo.get("contacto"),
+                            "notas": proveedor_completo.get("notas"),
+                            "dias_credito": int(proveedor_completo.get("dias_credito", 0) or 0),
+                            "descuento_comercial": float(proveedor_completo.get("descuento_comercial", 0) or 0),
+                            "descuento_pronto_pago": float(proveedor_completo.get("descuento_pronto_pago", 0) or 0),
+                            "estado": proveedor_completo.get("estado", "activo")
+                        }
+                        
+                        # Formatear fechas si existen
+                        if proveedor_completo.get("fecha_creacion"):
+                            if isinstance(proveedor_completo["fecha_creacion"], datetime):
+                                proveedor_dict["fecha_creacion"] = proveedor_completo["fecha_creacion"].strftime("%Y-%m-%d %H:%M:%S")
+                            else:
+                                proveedor_dict["fecha_creacion"] = proveedor_completo.get("fecha_creacion")
+                        
+                        if proveedor_completo.get("fecha_actualizacion"):
+                            if isinstance(proveedor_completo["fecha_actualizacion"], datetime):
+                                proveedor_dict["fecha_actualizacion"] = proveedor_completo["fecha_actualizacion"].strftime("%Y-%m-%d %H:%M:%S")
+                            else:
+                                proveedor_dict["fecha_actualizacion"] = proveedor_completo.get("fecha_actualizacion")
+                        
+                        compra["proveedor"] = proveedor_dict
+                        print(f"[LISTAR-COMPRAS] Proveedor poblado para compra {compra['_id']}: {proveedor_dict.get('nombre')}")
+                    else:
+                        # Si no se encuentra el proveedor, crear objeto mínimo
+                        compra["proveedor"] = {
+                            "_id": proveedor_id,
+                            "nombre": compra.get("proveedor_nombre", "Proveedor no encontrado"),
+                            "dias_credito": 0,
+                            "descuento_comercial": 0.0,
+                            "descuento_pronto_pago": 0.0,
+                            "estado": "inactivo"
+                        }
+                        print(f"[LISTAR-COMPRAS] ⚠️ Proveedor no encontrado para compra {compra['_id']}, usando datos mínimos")
+                except (InvalidId, Exception) as e:
+                    # Si hay error al obtener el proveedor, crear objeto mínimo
+                    compra["proveedor"] = {
+                        "_id": proveedor_id,
+                        "nombre": compra.get("proveedor_nombre", "Proveedor inválido"),
+                        "dias_credito": 0,
+                        "descuento_comercial": 0.0,
+                        "descuento_pronto_pago": 0.0,
+                        "estado": "inactivo"
+                    }
+                    print(f"[LISTAR-COMPRAS] ⚠️ Error al obtener proveedor {proveedor_id}: {str(e)}")
+            else:
+                # Si no hay proveedor_id, crear objeto vacío
+                compra["proveedor"] = {
+                    "nombre": compra.get("proveedor_nombre", "Sin proveedor"),
+                    "dias_credito": 0,
+                    "descuento_comercial": 0.0,
+                    "descuento_pronto_pago": 0.0,
+                    "estado": "inactivo"
+                }
             
             # Calcular estado de pago si no existe
             monto_total = compra.get("total_con_iva") or compra.get("total", 0)
@@ -1100,11 +1174,12 @@ async def listar_compras(
             # Calcular monto pendiente
             compra["monto_pendiente"] = monto_total - monto_pagado
             
-            # Calcular días de crédito y mora
+            # Calcular días de crédito y mora (usar días de crédito del proveedor si está disponible)
+            dias_credito_proveedor = compra.get("proveedor", {}).get("dias_credito", 0) or compra.get("dias_credito", 0) or 0
             dias_credito, dias_mora = calcular_dias_credito_y_mora(
                 compra.get("fecha_compra", ""),
                 compra.get("fecha_vencimiento_factura"),
-                compra.get("dias_credito", 0) or 0
+                dias_credito_proveedor
             )
             compra["dias_credito"] = dias_credito
             compra["dias_mora"] = dias_mora

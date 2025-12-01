@@ -82,11 +82,33 @@ class CompraCreate(BaseModel):
     notas: Optional[str] = Field(None, description="Notas adicionales sobre la compra")
 
 
+class ProveedorEnCompra(BaseModel):
+    """Modelo simplificado del proveedor dentro de una compra"""
+    _id: str
+    nombre: str
+    rif: Optional[str] = None
+    telefono: Optional[str] = None
+    email: Optional[str] = None
+    direccion: Optional[str] = None
+    contacto: Optional[str] = None
+    notas: Optional[str] = None
+    dias_credito: int = 0
+    descuento_comercial: float = 0.0
+    descuento_pronto_pago: float = 0.0
+    estado: Optional[str] = "activo"
+    fecha_creacion: Optional[str] = None
+    fecha_actualizacion: Optional[str] = None
+    
+    class Config:
+        extra = "allow"
+
+
 class CompraResponse(BaseModel):
     """Modelo de respuesta para una compra"""
     _id: str
     proveedor_id: str
     proveedor_nombre: Optional[str] = None
+    proveedor: Optional[ProveedorEnCompra] = None  # Objeto completo del proveedor
     farmacia: str
     sucursal: Optional[str] = None
     sucursal_id: Optional[str] = None
