@@ -1142,17 +1142,44 @@ async def listar_compras(
 @router.post("/compras/{compra_id}/pagos", response_model=PagoCompraResponse, status_code=201)
 async def crear_pago_compra(
     compra_id: str,
-    pago: PagoCompraCreate,
+    request: Request,
     usuario: dict = Depends(get_current_user)
 ):
     """
     Crear un pago para una compra.
     Actualiza automáticamente el estado de pago de la compra.
+    Si se proporciona banco_id, resta el saldo del banco.
     Requiere permiso: compras
     """
     verificar_permiso(usuario, "compras")
     
     try:
+        # Obtener datos del request
+        data = await request.json()
+        
+        # Normalizar campos opcionales
+        monto = float(data.get("monto", 0) or 0)
+        if monto <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="El monto del pago debe ser mayor a 0"
+            )
+        
+        fecha_pago = data.get("fecha_pago")
+        if not fecha_pago:
+            fecha_pago = datetime.now().strftime("%Y-%m-%d")
+        
+        metodo_pago = data.get("metodo_pago", "")
+        if not metodo_pago:
+            raise HTTPException(
+                status_code=400,
+                detail="El método de pago es requerido"
+            )
+        
+        banco_id = data.get("banco_id")
+        referencia = data.get("referencia")
+        notas = data.get("notas")
+        
         # Validar que la compra existe
         compras_collection = get_collection("COMPRAS")
         try:
@@ -1180,7 +1207,7 @@ async def crear_pago_compra(
         # Obtener montos
         monto_total = compra.get("total_con_iva") or compra.get("total", 0)
         monto_pagado_actual = compra.get("monto_pagado", 0) or 0
-        nuevo_monto_pagado = monto_pagado_actual + pago.monto
+        nuevo_monto_pagado = monto_pagado_actual + monto
         
         # Validar que no se pague más del total
         if nuevo_monto_pagado > monto_total + 0.01:  # Tolerancia para decimales
@@ -1189,12 +1216,63 @@ async def crear_pago_compra(
                 detail=f"El monto del pago excede el total pendiente. Total: {monto_total}, Pagado: {monto_pagado_actual}, Pendiente: {monto_total - monto_pagado_actual}"
             )
         
+        # Si se proporciona banco_id, validar y restar el saldo del banco
+        if banco_id:
+            bancos_collection = get_collection("BANCOS")
+            try:
+                banco_oid = ObjectId(banco_id)
+            except InvalidId:
+                raise HTTPException(
+                    status_code=400,
+                    detail="ID de banco inválido"
+                )
+            
+            banco = await bancos_collection.find_one({"_id": banco_oid})
+            if not banco:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Banco no encontrado"
+                )
+            
+            # Verificar que el banco esté activo
+            if not banco.get("activo", True):
+                raise HTTPException(
+                    status_code=400,
+                    detail="El banco seleccionado no está activo"
+                )
+            
+            # Obtener saldo actual del banco
+            saldo_actual = float(banco.get("saldo", 0) or 0)
+            
+            # Verificar que el banco tenga suficiente saldo
+            if saldo_actual < monto:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El banco no tiene suficiente saldo. Saldo disponible: {saldo_actual}, Monto requerido: {monto}"
+                )
+            
+            # Restar el saldo del banco
+            nuevo_saldo = saldo_actual - monto
+            await bancos_collection.update_one(
+                {"_id": banco_oid},
+                {"$set": {"saldo": nuevo_saldo}}
+            )
+            
+            print(f"[CREAR-PAGO-COMPRA] Saldo del banco actualizado: {saldo_actual} -> {nuevo_saldo} (restado: {monto})")
+        
         # Crear registro de pago
         pagos_collection = get_collection("PAGOS_COMPRAS")
-        pago_dict = pago.dict()
-        pago_dict["compra_id"] = compra_id
-        pago_dict["usuario_creacion"] = usuario.get("correo", usuario.get("usuarioCorreo", "unknown"))
-        pago_dict["fecha_creacion"] = datetime.now().isoformat()
+        pago_dict = {
+            "compra_id": compra_id,
+            "monto": monto,
+            "fecha_pago": fecha_pago,
+            "metodo_pago": metodo_pago,
+            "referencia": referencia,
+            "banco_id": banco_id,
+            "notas": notas,
+            "usuario_creacion": usuario.get("correo", usuario.get("usuarioCorreo", "unknown")),
+            "fecha_creacion": datetime.now().isoformat()
+        }
         
         result_pago = await pagos_collection.insert_one(pago_dict)
         pago_id = str(result_pago.inserted_id)

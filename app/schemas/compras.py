@@ -117,11 +117,15 @@ class CompraResponse(BaseModel):
 
 class PagoCompraCreate(BaseModel):
     """Modelo para crear un pago de compra"""
-    monto: float = Field(..., description="Monto del pago", gt=0)
-    fecha_pago: str = Field(..., description="Fecha del pago (YYYY-MM-DD)")
-    metodo_pago: str = Field(..., description="Método de pago (efectivo, transferencia, cheque, etc.)")
+    monto: Optional[float] = Field(None, description="Monto del pago", gt=0)
+    fecha_pago: Optional[str] = Field(None, description="Fecha del pago (YYYY-MM-DD). Si no se proporciona, se usa la fecha actual")
+    metodo_pago: str = Field(..., description="Método de pago (efectivo, transferencia, cheque, pago_movil, etc.)")
     referencia: Optional[str] = Field(None, description="Referencia del pago (número de cheque, transferencia, etc.)")
+    banco_id: Optional[str] = Field(None, description="ID del banco utilizado para el pago")
     notas: Optional[str] = Field(None, description="Notas adicionales sobre el pago")
+    
+    class Config:
+        extra = "allow"  # Permitir campos adicionales
 
 
 class PagoCompraResponse(BaseModel):
@@ -132,6 +136,7 @@ class PagoCompraResponse(BaseModel):
     fecha_pago: str
     metodo_pago: str
     referencia: Optional[str] = None
+    banco_id: Optional[str] = None
     notas: Optional[str] = None
     usuario_creacion: Optional[str] = None
     fecha_creacion: Optional[str] = None
