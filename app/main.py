@@ -556,12 +556,22 @@ try:
                 if bancos and len(bancos) > 0:
                     resultado = []
                     for banco in bancos:
+                        # Normalizar saldo: asegurar que siempre sea un float con valor por defecto 0.0
+                        saldo_banco = banco.get("saldo")
+                        if saldo_banco is None:
+                            saldo_banco = 0.0
+                        else:
+                            try:
+                                saldo_banco = float(saldo_banco)
+                            except (ValueError, TypeError):
+                                saldo_banco = 0.0
+                        
                         banco_dict = {
                             "_id": str(banco.get("_id", "")),
                             "numero_cuenta": banco.get("numero_cuenta", banco.get("numeroCuenta", "")),
                             "nombre_banco": banco.get("nombre_banco", banco.get("nombreBanco", banco.get("nombre", banco.get("banco", "")))),
                             "nombre_titular": banco.get("nombre_titular", banco.get("nombreTitular", "")),
-                            "saldo": float(banco.get("saldo", 0) or 0),
+                            "saldo": saldo_banco,  # Siempre será un float, nunca None
                             "divisa": banco.get("divisa", "USD"),
                             "activo": banco.get("activo", True),
                             "tipo_metodo": banco.get("tipo_metodo", "pago_movil")  # Valor por defecto si no existe
