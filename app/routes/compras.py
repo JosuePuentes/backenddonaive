@@ -1334,6 +1334,61 @@ async def crear_pago_compra(
             )
             
             print(f"[CREAR-PAGO-COMPRA] Saldo del banco actualizado: {saldo_actual} -> {nuevo_saldo} (restado: {monto})")
+            
+            # Obtener información del proveedor para la descripción
+            proveedor_nombre = compra.get("proveedor_nombre", "Proveedor desconocido")
+            proveedor_id = compra.get("proveedor_id")
+            if proveedor_id:
+                try:
+                    proveedor_oid = ObjectId(proveedor_id)
+                    proveedores_collection = get_collection("PROVEEDORES")
+                    proveedor_completo = await proveedores_collection.find_one({"_id": proveedor_oid})
+                    if proveedor_completo:
+                        proveedor_nombre = proveedor_completo.get("nombre", proveedor_nombre)
+                except Exception as e:
+                    print(f"[CREAR-PAGO-COMPRA] Error al obtener proveedor para movimiento: {str(e)}")
+            
+            # Obtener información de la compra para la descripción
+            numero_factura = compra.get("numero_factura", "")
+            numero_factura_texto = f"Factura {numero_factura}" if numero_factura else "Compra"
+            
+            # Crear movimiento en el banco
+            movimientos_collection = get_collection("MOVIMIENTOS_BANCOS")
+            divisa_banco = banco.get("divisa", "USD")
+            
+            # Construir descripción
+            descripcion = f"Pago Compra - {proveedor_nombre}"
+            if numero_factura:
+                descripcion += f" ({numero_factura_texto})"
+            if referencia:
+                descripcion += f" - Ref: {referencia}"
+            
+            movimiento = {
+                "banco_id": banco_id,
+                "tipo": "pago_compra",
+                "monto": -monto,  # Negativo para indicar egreso
+                "divisa": divisa_banco,
+                "compra_id": compra_id,
+                "pago_id": None,  # Se actualizará después de crear el pago
+                "proveedor_id": proveedor_id,
+                "proveedor_nombre": proveedor_nombre,
+                "numero_factura": numero_factura,
+                "fecha": datetime.now().isoformat(),
+                "fecha_pago": fecha_pago,
+                "usuario": usuario.get("correo", usuario.get("usuarioCorreo", "")),
+                "descripcion": descripcion,
+                "referencia": referencia,
+                "metodo_pago": metodo_pago,
+                "notas": notas,
+                "saldo_anterior": saldo_actual,
+                "saldo_nuevo": nuevo_saldo
+            }
+            
+            # Insertar movimiento (se actualizará el pago_id después)
+            result_movimiento = await movimientos_collection.insert_one(movimiento)
+            movimiento_id = str(result_movimiento.inserted_id)
+            movimiento_id_obj = result_movimiento.inserted_id  # Guardar ObjectId para actualizar después
+            print(f"[CREAR-PAGO-COMPRA] Movimiento creado en banco: {movimiento_id} para banco {banco_id}")
         
         # Crear registro de pago
         pagos_collection = get_collection("PAGOS_COMPRAS")
@@ -1353,6 +1408,18 @@ async def crear_pago_compra(
         pago_id = str(result_pago.inserted_id)
         
         print(f"[CREAR-PAGO-COMPRA] Pago creado con ID: {pago_id} para compra {compra_id}")
+        
+        # Si se creó un movimiento, actualizarlo con el pago_id
+        if banco_id and 'movimiento_id_obj' in locals():
+            try:
+                movimientos_collection = get_collection("MOVIMIENTOS_BANCOS")
+                await movimientos_collection.update_one(
+                    {"_id": movimiento_id_obj},
+                    {"$set": {"pago_id": pago_id}}
+                )
+                print(f"[CREAR-PAGO-COMPRA] Movimiento actualizado con pago_id: {pago_id}")
+            except Exception as e:
+                print(f"[CREAR-PAGO-COMPRA] Error al actualizar movimiento con pago_id: {str(e)}")
         
         # Actualizar compra con nuevo monto pagado y estado
         nuevo_estado_pago = calcular_estado_pago(monto_total, nuevo_monto_pagado)
