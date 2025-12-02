@@ -129,7 +129,10 @@ class CompraResponse(BaseModel):
     estado: Optional[str] = "activa"
     estado_pago: Optional[str] = "sin_pago"  # sin_pago, abonado, pagada
     monto_pagado: float = 0.0
+    monto_abonado: Optional[float] = 0.0  # Suma de todos los pagos
     monto_pendiente: float = 0.0
+    monto_restante: Optional[float] = 0.0  # Alias de monto_pendiente
+    pagos: Optional[List[dict]] = []  # Array completo de pagos de la compra
     dias_credito: int = 0
     dias_mora: int = 0
     

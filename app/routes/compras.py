@@ -1086,8 +1086,9 @@ async def listar_compras(
         compras = await compras_collection.find(query).skip(skip).limit(limit).sort("fecha_creacion", -1).to_list(length=limit)
         print(f"[LISTAR-COMPRAS] Compras encontradas después de paginación: {len(compras)}")
         
-        # Obtener colección de proveedores para poblar datos
+        # Obtener colecciones necesarias
         proveedores_collection = get_collection("PROVEEDORES")
+        pagos_collection = get_collection("PAGOS_COMPRAS")
         
         # Formatear resultados y calcular estados
         resultado = []
@@ -1165,14 +1166,67 @@ async def listar_compras(
                     "estado": "inactivo"
                 }
             
-            # Calcular estado de pago si no existe
-            monto_total = compra.get("total_con_iva") or compra.get("total", 0)
-            monto_pagado = compra.get("monto_pagado", 0) or 0
-            if not compra.get("estado_pago"):
-                compra["estado_pago"] = calcular_estado_pago(monto_total, monto_pagado)
+            # Obtener todos los pagos de esta compra
+            compra_id_str = compra["_id"]
+            pagos_compra = await pagos_collection.find({"compra_id": compra_id_str}).sort("fecha_creacion", 1).to_list(length=None)
             
-            # Calcular monto pendiente
-            compra["monto_pendiente"] = monto_total - monto_pagado
+            # Formatear pagos y calcular monto_abonado
+            pagos_formateados = []
+            monto_abonado = 0.0
+            
+            for pago in pagos_compra:
+                pago_monto = float(pago.get("monto", 0) or 0)
+                monto_abonado += pago_monto
+                
+                pago_dict = {
+                    "_id": str(pago.get("_id", "")),
+                    "compra_id": compra_id_str,
+                    "monto": pago_monto,
+                    "fecha_pago": pago.get("fecha_pago", ""),
+                    "metodo_pago": pago.get("metodo_pago", ""),
+                    "referencia": pago.get("referencia"),
+                    "banco_id": pago.get("banco_id"),
+                    "notas": pago.get("notas"),
+                    "usuario_creacion": pago.get("usuario_creacion"),
+                    "fecha_creacion": pago.get("fecha_creacion", "")
+                }
+                
+                # Formatear fecha_creacion si es datetime
+                if pago.get("fecha_creacion"):
+                    if isinstance(pago["fecha_creacion"], datetime):
+                        pago_dict["fecha_creacion"] = pago["fecha_creacion"].isoformat()
+                
+                pagos_formateados.append(pago_dict)
+            
+            # Calcular montos y estado
+            monto_total = compra.get("total_con_iva") or compra.get("total", 0)
+            monto_total = float(monto_total or 0)
+            
+            # Usar monto_abonado calculado desde los pagos, o el monto_pagado guardado como fallback
+            if monto_abonado > 0:
+                monto_pagado_calculado = monto_abonado
+            else:
+                monto_pagado_calculado = float(compra.get("monto_pagado", 0) or 0)
+            
+            monto_restante = monto_total - monto_pagado_calculado
+            
+            # Calcular estado según las reglas
+            if monto_pagado_calculado >= monto_total:
+                estado_pago_calculado = "pagada"
+            elif monto_pagado_calculado > 0:
+                estado_pago_calculado = "abonado"
+            else:
+                estado_pago_calculado = "sin_pago"
+            
+            # Actualizar compra con valores calculados
+            compra["monto_pagado"] = monto_pagado_calculado
+            compra["monto_abonado"] = monto_abonado  # Nuevo campo
+            compra["monto_pendiente"] = monto_restante
+            compra["monto_restante"] = monto_restante  # Alias para compatibilidad
+            compra["estado_pago"] = estado_pago_calculado
+            compra["pagos"] = pagos_formateados  # Array completo de pagos
+            
+            print(f"[LISTAR-COMPRAS] Compra {compra_id_str}: Total=${monto_total}, Abonado=${monto_abonado}, Restante=${monto_restante}, Estado={estado_pago_calculado}, Pagos={len(pagos_formateados)}")
             
             # Calcular días de crédito y mora (usar días de crédito del proveedor si está disponible)
             dias_credito_proveedor = compra.get("proveedor", {}).get("dias_credito", 0) or compra.get("dias_credito", 0) or 0
