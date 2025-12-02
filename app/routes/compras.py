@@ -1291,6 +1291,9 @@ async def crear_pago_compra(
                 detail=f"El monto del pago excede el total pendiente. Total: {monto_total}, Pagado: {monto_pagado_actual}, Pendiente: {monto_total - monto_pagado_actual}"
             )
         
+        # Variable para guardar el ID del movimiento si se crea
+        movimiento_id_obj = None
+        
         # Si se proporciona banco_id, validar y restar el saldo del banco
         if banco_id:
             bancos_collection = get_collection("BANCOS")
@@ -1410,7 +1413,7 @@ async def crear_pago_compra(
         print(f"[CREAR-PAGO-COMPRA] Pago creado con ID: {pago_id} para compra {compra_id}")
         
         # Si se creó un movimiento, actualizarlo con el pago_id
-        if banco_id and 'movimiento_id_obj' in locals():
+        if movimiento_id_obj:
             try:
                 movimientos_collection = get_collection("MOVIMIENTOS_BANCOS")
                 await movimientos_collection.update_one(
