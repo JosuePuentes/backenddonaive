@@ -1442,10 +1442,19 @@ async def crear_pago_compra(
             }
             
             # Insertar movimiento (se actualizará el pago_id después)
+            print(f"[CREAR-PAGO-COMPRA] 📝 Creando movimiento en banco {banco_id} (ObjectId: {banco_oid})")
+            print(f"[CREAR-PAGO-COMPRA] 📝 Datos del movimiento: tipo={movimiento['tipo']}, monto={movimiento['monto']}, banco_id={type(banco_oid).__name__}")
+            
             result_movimiento = await movimientos_collection.insert_one(movimiento)
             movimiento_id = str(result_movimiento.inserted_id)
             movimiento_id_obj = result_movimiento.inserted_id  # Guardar ObjectId para actualizar después
-            print(f"[CREAR-PAGO-COMPRA] Movimiento creado en banco: {movimiento_id} para banco {banco_id}")
+            
+            print(f"[CREAR-PAGO-COMPRA] ✅ Movimiento creado exitosamente!")
+            print(f"[CREAR-PAGO-COMPRA] ✅ ID del movimiento: {movimiento_id}")
+            print(f"[CREAR-PAGO-COMPRA] ✅ Banco ID (ObjectId): {banco_oid}")
+            print(f"[CREAR-PAGO-COMPRA] ✅ Tipo: {movimiento['tipo']}")
+            print(f"[CREAR-PAGO-COMPRA] ✅ Monto: {movimiento['monto']} {movimiento['divisa']}")
+            print(f"[CREAR-PAGO-COMPRA] ✅ Descripción: {movimiento['descripcion']}")
         
         # Crear registro de pago
         pagos_collection = get_collection("PAGOS_COMPRAS")
