@@ -774,19 +774,43 @@ try:
             movimientos = []
             
             # 1. Buscar en colección MOVIMIENTOS_BANCOS (si existe)
+            # IMPORTANTE: No filtrar por tipo, solo por banco_id
+            # Buscar tanto por string como por ObjectId para compatibilidad
             try:
                 movimientos_collection = get_collection("MOVIMIENTOS_BANCOS")
-                movimientos_docs = await movimientos_collection.find({
-                    "banco_id": banco_id
-                }).sort("fecha", -1).to_list(length=None)
                 
+                # Buscar movimientos: puede estar guardado como string o como ObjectId
+                query = {
+                    "$or": [
+                        {"banco_id": banco_id},  # String
+                        {"banco_id": banco_oid}   # ObjectId
+                    ]
+                }
+                
+                movimientos_docs = await movimientos_collection.find(query).sort("fecha", -1).to_list(length=None)
+                
+                # Contar movimientos por tipo para diagnóstico
+                tipos_encontrados = {}
                 for mov in movimientos_docs:
                     mov["_id"] = str(mov["_id"])
+                    tipo_mov = mov.get("tipo", "sin_tipo")
+                    tipos_encontrados[tipo_mov] = tipos_encontrados.get(tipo_mov, 0) + 1
                     movimientos.append(mov)
                 
-                print(f"[OBTENER-MOVIMIENTOS-BANCO] Encontrados {len(movimientos_docs)} movimientos en MOVIMIENTOS_BANCOS")
+                print(f"[OBTENER-MOVIMIENTOS-BANCO] ✅ Encontrados {len(movimientos_docs)} movimientos en MOVIMIENTOS_BANCOS")
+                print(f"[OBTENER-MOVIMIENTOS-BANCO] 📊 Movimientos por tipo: {tipos_encontrados}")
+                
+                # Verificar específicamente movimientos de tipo "pago_compra"
+                pagos_compra_count = tipos_encontrados.get("pago_compra", 0)
+                if pagos_compra_count > 0:
+                    print(f"[OBTENER-MOVIMIENTOS-BANCO] ✅ Encontrados {pagos_compra_count} movimientos de tipo 'pago_compra'")
+                else:
+                    print(f"[OBTENER-MOVIMIENTOS-BANCO] ⚠️ No se encontraron movimientos de tipo 'pago_compra'")
+                    
             except Exception as e:
-                print(f"[OBTENER-MOVIMIENTOS-BANCO] No se encontró colección MOVIMIENTOS_BANCOS: {str(e)}")
+                print(f"[OBTENER-MOVIMIENTOS-BANCO] ❌ Error al buscar en MOVIMIENTOS_BANCOS: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
             
             # 2. Buscar en PAGOS_CPP donde el banco es emisor o receptor
             try:

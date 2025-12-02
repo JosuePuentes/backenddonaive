@@ -100,11 +100,99 @@ La descripción se construye automáticamente con:
 
 ### `GET /bancos/{banco_id}/movimientos`
 
-Este endpoint ya está implementado y devuelve todos los movimientos del banco, incluyendo:
+Este endpoint está implementado y devuelve **TODOS** los movimientos del banco, **sin filtrar por tipo**, incluyendo:
 - Movimientos de tipo `"pago_compra"` desde `MOVIMIENTOS_BANCOS`
 - Movimientos de tipo `"venta"` desde `MOVIMIENTOS_BANCOS`
 - Movimientos de tipo `"vuelto"` desde `MOVIMIENTOS_BANCOS`
 - Pagos CPP desde `PAGOS_CPP`
+- Cualquier otro tipo de movimiento
+
+### ⚠️ IMPORTANTE: No Filtrar por Tipo
+
+**La consulta NO debe filtrar por tipo**, solo por `banco_id`:
+
+```python
+# ✅ CORRECTO: Buscar solo por banco_id (sin filtro de tipo)
+query = {
+    "$or": [
+        {"banco_id": banco_id},  # String
+        {"banco_id": banco_oid}   # ObjectId
+    ]
+}
+movimientos_docs = await movimientos_collection.find(query).sort("fecha", -1).to_list(length=None)
+
+# ❌ INCORRECTO: No filtrar por tipo
+# query = {"banco_id": banco_id, "tipo": "pago_compra"}  # ❌ Esto excluiría otros tipos
+```
+
+### 🔧 Conversión de ObjectId
+
+El endpoint busca movimientos tanto por string como por ObjectId para compatibilidad:
+
+```python
+from bson import ObjectId
+from bson.errors import InvalidId
+
+try:
+    banco_oid = ObjectId(banco_id)
+except InvalidId:
+    raise HTTPException(status_code=400, detail="ID de banco inválido")
+
+# Buscar movimientos: puede estar guardado como string o como ObjectId
+query = {
+    "$or": [
+        {"banco_id": banco_id},  # String
+        {"banco_id": banco_oid}   # ObjectId
+    ]
+}
+```
+
+### 📊 Logging para Diagnóstico
+
+El endpoint ahora incluye logging detallado:
+
+```python
+# Contar movimientos por tipo para diagnóstico
+tipos_encontrados = {}
+for mov in movimientos_docs:
+    tipo_mov = mov.get("tipo", "sin_tipo")
+    tipos_encontrados[tipo_mov] = tipos_encontrados.get(tipo_mov, 0) + 1
+
+print(f"[OBTENER-MOVIMIENTOS-BANCO] ✅ Encontrados {len(movimientos_docs)} movimientos en MOVIMIENTOS_BANCOS")
+print(f"[OBTENER-MOVIMIENTOS-BANCO] 📊 Movimientos por tipo: {tipos_encontrados}")
+
+# Verificar específicamente movimientos de tipo "pago_compra"
+pagos_compra_count = tipos_encontrados.get("pago_compra", 0)
+if pagos_compra_count > 0:
+    print(f"[OBTENER-MOVIMIENTOS-BANCO] ✅ Encontrados {pagos_compra_count} movimientos de tipo 'pago_compra'")
+else:
+    print(f"[OBTENER-MOVIMIENTOS-BANCO] ⚠️ No se encontraron movimientos de tipo 'pago_compra'")
+```
+
+### 🔍 Verificación en el Frontend
+
+Al abrir el historial de un banco, revisa la consola del navegador. Deberías ver:
+
+```
+🔍 [BANCOS] Obteniendo movimientos para banco {id}...
+📋 [BANCOS] Respuesta del backend: (JSON completo)
+✅ [BANCOS] Movimientos encontrados: X
+📊 [BANCOS] Movimientos por tipo: (conteo por tipo)
+```
+
+**En los logs del backend**, deberías ver:
+
+```
+[OBTENER-MOVIMIENTOS-BANCO] Buscando movimientos para banco: {banco_id}
+[OBTENER-MOVIMIENTOS-BANCO] ✅ Encontrados X movimientos en MOVIMIENTOS_BANCOS
+[OBTENER-MOVIMIENTOS-BANCO] 📊 Movimientos por tipo: {'pago_compra': 2, 'venta': 5, 'vuelto': 1}
+[OBTENER-MOVIMIENTOS-BANCO] ✅ Encontrados 2 movimientos de tipo 'pago_compra'
+```
+
+**Si no aparecen movimientos de tipo "pago_compra":**
+1. Verifica que al crear un pago de compra se esté creando el movimiento
+2. Verifica que el `banco_id` en el movimiento coincida con el `banco_id` del banco
+3. Verifica que la consulta no esté filtrando por tipo
 
 **Respuesta:**
 ```json
@@ -200,6 +288,39 @@ Cuando el frontend consulta `GET /bancos/{banco_id}/movimientos`, verá:
    - Después de crear el pago, se actualiza con el `pago_id` real
    - Esto permite vincular el movimiento con el pago
 
+## ✅ Verificación del Backend
+
+El backend debe verificar:
+
+1. **Que al crear un pago de compra se esté creando el movimiento:**
+   - Verificar en `POST /compras/{compra_id}/pagos` que se cree el movimiento
+   - El movimiento debe tener `tipo: "pago_compra"`
+   - El movimiento debe tener `banco_id` correcto
+
+2. **Que el endpoint `GET /bancos/{banco_id}/movimientos` devuelva todos los movimientos:**
+   - **NO debe filtrar por tipo** (solo por `banco_id`)
+   - La consulta debe ser: `{"banco_id": banco_id}` o `{"banco_id": ObjectId(banco_id)}`
+   - Debe buscar tanto por string como por ObjectId
+
+3. **Que la consulta use ObjectId correctamente:**
+   ```python
+   from bson import ObjectId
+   from bson.errors import InvalidId
+   
+   try:
+       banco_oid = ObjectId(banco_id)
+   except InvalidId:
+       raise HTTPException(status_code=400, detail="ID de banco inválido")
+   
+   # Buscar movimientos: puede estar guardado como string o como ObjectId
+   query = {
+       "$or": [
+           {"banco_id": banco_id},  # String
+           {"banco_id": banco_oid}   # ObjectId
+       ]
+   }
+   ```
+
 ## 🚀 Estado
 
 ✅ **Implementación completada y desplegada**
@@ -210,5 +331,18 @@ El endpoint `POST /compras/{compra_id}/pagos` ahora:
 - Incluye información completa del proveedor y la compra
 - Vincula el movimiento con el pago mediante `pago_id`
 
-Los movimientos aparecerán automáticamente en `GET /bancos/{banco_id}/movimientos` y el frontend podrá mostrarlos en el historial del banco.
+El endpoint `GET /bancos/{banco_id}/movimientos` ahora:
+- Devuelve **TODOS** los movimientos del banco (sin filtrar por tipo)
+- Busca tanto por string como por ObjectId para compatibilidad
+- Incluye logging detallado para diagnóstico
+- Cuenta movimientos por tipo para verificación
+
+Los movimientos de tipo `"pago_compra"` aparecerán automáticamente en `GET /bancos/{banco_id}/movimientos` y el frontend podrá mostrarlos en el historial del banco.
+
+## 📝 Próximos Pasos
+
+1. **Abre el historial de un banco donde hiciste un pago de compra**
+2. **Revisa la consola del navegador** para ver los logs del frontend
+3. **Revisa los logs del backend** para verificar que se encuentren los movimientos
+4. **Comparte los logs con el desarrollador del backend** si no aparecen los movimientos de "pago_compra"
 
