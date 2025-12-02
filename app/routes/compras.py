@@ -1421,9 +1421,9 @@ async def crear_pago_compra(
                 descripcion += f" - Ref: {referencia}"
             
             movimiento = {
-                "banco_id": banco_id,
+                "banco_id": banco_oid,  # Guardar como ObjectId, no como string
                 "tipo": "pago_compra",
-                "monto": -monto,  # Negativo para indicar egreso
+                "monto": -abs(monto),  # Negativo para indicar egreso (usar abs para asegurar que sea negativo)
                 "divisa": divisa_banco,
                 "compra_id": compra_id,
                 "pago_id": None,  # Se actualizará después de crear el pago
