@@ -1450,6 +1450,7 @@ async def crear_pago_compra(
             movimiento_id_obj = result_movimiento.inserted_id  # Guardar ObjectId para actualizar después
             
             print(f"[CREAR-PAGO-COMPRA] ✅ Movimiento creado exitosamente!")
+            print(f"[PAGO-COMPRA] ✅ Movimiento creado")  # Log simplificado para búsqueda fácil
             print(f"[CREAR-PAGO-COMPRA] ✅ ID del movimiento: {movimiento_id}")
             print(f"[CREAR-PAGO-COMPRA] ✅ Banco ID (ObjectId): {banco_oid}")
             print(f"[CREAR-PAGO-COMPRA] ✅ Tipo: {movimiento['tipo']}")
